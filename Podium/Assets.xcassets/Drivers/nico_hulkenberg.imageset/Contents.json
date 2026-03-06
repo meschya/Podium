@@ -1,0 +1,12 @@
+{
+  "images" : [
+    {
+      "filename" : "nico_hulkenberg.png",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

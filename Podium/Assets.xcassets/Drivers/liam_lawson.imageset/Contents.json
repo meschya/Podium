@@ -1,0 +1,12 @@
+{
+  "images" : [
+    {
+      "filename" : "liam_lawson.png",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

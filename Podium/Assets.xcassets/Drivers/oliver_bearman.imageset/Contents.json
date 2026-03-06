@@ -1,0 +1,12 @@
+{
+  "images" : [
+    {
+      "filename" : "oliver_bearman.png",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "images" : [
+    {
+      "filename" : "alpine_bolid.png",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

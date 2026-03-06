@@ -1,0 +1,23 @@
+{
+  "images" : [
+    {
+      "filename" : "aston_martin_splash.png",
+      "idiom" : "universal",
+      "scale" : "1x"
+    },
+    {
+      "filename" : "2023-Formula1-Aston-Martin-AMR23-003-2800p 1@2x.png",
+      "idiom" : "universal",
+      "scale" : "2x"
+    },
+    {
+      "filename" : "2023-Formula1-Aston-Martin-AMR23-003-2800p 1@3x.png",
+      "idiom" : "universal",
+      "scale" : "3x"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}
