@@ -52,7 +52,7 @@ private struct LiveTrackCanvas: View {
 
     private let spacing = 0.048
     private let dotRadius: CGFloat = 8
-    private let animDuration: TimeInterval = 0.4
+    private let animDuration: TimeInterval = 0.2
 
     /// Текущие целевые позиции (из API или по прогрессу).
     private func targetPositions(w: CGFloat, h: CGFloat) -> [Int: (CGFloat, CGFloat)] {
@@ -138,7 +138,8 @@ private struct LiveTrackCanvas: View {
 
     private func dotPosition(driverNumber: Int, position: Int, w: CGFloat, h: CGFloat) -> (CGFloat, CGFloat) {
         if let (tx, ty) = locations[driverNumber], let info = circuitInfo {
-            let (u, v) = info.normalizedUV(trackX: tx, trackY: ty)
+            // Проекция на трассу (кружки на линии). Координаты как в OpenF1/circuit_info.
+            let (u, v) = info.normalizedUVProjected(trackX: tx, trackY: ty)
             return (u * w, (1 - v) * h)
         }
         return pointOnTrack(driverProgress(position), w: w, h: h)

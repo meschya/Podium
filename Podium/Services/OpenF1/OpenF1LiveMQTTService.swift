@@ -56,7 +56,7 @@ final class OpenF1LiveMQTTService: NSObject {
         client.enableSSL = true
         client.keepAlive = 60
         client.autoReconnect = true
-        client.delegateQueue = .main
+        client.delegateQueue = queue
 
         var messageCount = 0
         client.didConnectAck = { mqtt, ack in

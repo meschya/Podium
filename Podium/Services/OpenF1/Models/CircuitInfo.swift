@@ -83,11 +83,13 @@ struct CircuitInfo: Codable {
     }
 
     /// Проекция точки (например из OpenF1 location) на ближайшую точку трассы; возвращает (u,v) для отрисовки на карте.
+    /// Координаты машины поворачиваем так же, как контур трассы (rotation), чтобы совпадала система координат.
     func normalizedUVProjected(trackX: Int, trackY: Int) -> (u: CGFloat, v: CGFloat) {
         let pts = rotatedPoints()
         let n = pts.count
         guard n >= 2 else { return normalizedUV(trackX: trackX, trackY: trackY) }
-        let px = Double(trackX), py = Double(trackY)
+        let pt = rotatePoint(Double(trackX), Double(trackY))
+        let px = pt.0, py = pt.1
         var bestDist: Double = .infinity
         var bestT: Double = 0
         var bestSeg: Int = 0
@@ -121,6 +123,46 @@ struct CircuitInfo: Codable {
             }
         }
         return pointAtProgress(CGFloat(bestT))
+    }
+
+    /// Прогресс 0...1 вдоль трассы для точки (trackX, trackY). Для сортировки машин по позиции на трассе.
+    func progressAlongTrack(trackX: Int, trackY: Int) -> CGFloat {
+        let pts = rotatedPoints()
+        let n = pts.count
+        guard n >= 2 else { return 0.5 }
+        let pt = rotatePoint(Double(trackX), Double(trackY))
+        let px = pt.0, py = pt.1
+        var bestT: Double = 0
+        var totalLen: Double = 0
+        var segStarts: [Double] = [0]
+        for i in 0..<n {
+            let j = (i + 1) % n
+            let dx = pts[j].0 - pts[i].0, dy = pts[j].1 - pts[i].1
+            let segLen = (dx * dx + dy * dy).squareRoot()
+            totalLen += segLen
+            segStarts.append(totalLen)
+        }
+        guard totalLen > 0 else { return 0.5 }
+        var bestDist: Double = .infinity
+        for i in 0..<n {
+            let j = (i + 1) % n
+            let ax = pts[i].0, ay = pts[i].1
+            let bx = pts[j].0, by = pts[j].1
+            let dx = bx - ax, dy = by - ay
+            let segLen = (dx * dx + dy * dy).squareRoot()
+            guard segLen > 0 else { continue }
+            let t = ((px - ax) * dx + (py - ay) * dy) / (segLen * segLen)
+            let tClamp = max(0, min(1, t))
+            let projX = ax + dx * tClamp
+            let projY = ay + dy * tClamp
+            let d = (px - projX) * (px - projX) + (py - projY) * (py - projY)
+            if d < bestDist {
+                bestDist = d
+                let segStart = segStarts[i]
+                bestT = (segStart + tClamp * (segStarts[i + 1] - segStart)) / totalLen
+            }
+        }
+        return CGFloat(bestT)
     }
 
     func pointAtProgress(_ progress: CGFloat) -> (u: CGFloat, v: CGFloat) {

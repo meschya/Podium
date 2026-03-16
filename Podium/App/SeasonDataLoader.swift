@@ -1,6 +1,35 @@
 import Foundation
 import SwiftUI
 import Combine
+import CoreGraphics
+import UIKit
+
+/// Обновление точек на карте без SwiftUI — позиции и цвета команд.
+protocol LiveDotsViewUpdating: AnyObject {
+    func setPositions(_ positions: [CGPoint], colors: [UIColor])
+}
+
+/// Состояние только для лайв-карты. Подписывается только карта.
+final class LiveMapState: ObservableObject {
+    /// Прогресс 0...1 по трассе (официальный F1 тайминг / Position.z fallback).
+    @Published var positionProgressByDriver: [Int: CGFloat] = [:]
+    /// Реальные координаты машин по Position.z (официальный тайминг).
+    @Published var coordinatesByDriver: [Int: F1LiveCoordinate] = [:]
+    /// Сырые OpenF1 location (последние известные точки) — источник для SwiftUI карт (Home + Live).
+    @Published var locations: [OpenF1Location] = []
+    /// Версия locations: инкремент при каждом апдейте, чтобы карты могли анимировать изменения.
+    @Published var locationsVersion: Int = 0
+    /// Топ‑3 в лайве по позиции на трассе (из OpenF1 location): (позиция 1–3, номер, имя, команда для цвета).
+    @Published var top3LiveDrivers: [(position: Int, driverNumber: Int, name: String, teamName: String)] = []
+}
+
+/// Буфер позиций MQTT в акторе — приём с любого потока, отдача снэпшота без лагов main thread.
+private actor LiveLocationBuffer {
+    private var byDriver: [Int: OpenF1Location] = [:]
+    func add(_ loc: OpenF1Location) { byDriver[loc.driverNumber] = loc }
+    func snapshot() -> [OpenF1Location] { Array(byDriver.values) }
+    func reset() { byDriver = [:] }
+}
 
 @MainActor
 final class SeasonDataLoader: ObservableObject {
@@ -11,15 +40,28 @@ final class SeasonDataLoader: ObservableObject {
     @Published var championshipTop: [(position: Int, name: String, points: Int)] = []
     @Published var championshipTeamsTop: [(position: Int, name: String, points: Int)] = []
     @Published var nextMeetingSessions: [OpenF1Session] = []
-    /// Позиции машин с API при прямой трансляции (для кружков на карте в герое).
-    @Published var liveLocations: [OpenF1Location] = []
-    /// Позиции от официального F1 Live Timing (SignalR Position.z): прогресс по кругу 0...1 (fallback).
-    @Published var livePositionProgressByDriver: [Int: CGFloat] = [:]
-    /// Реальное расположение из Position.z по подписке (X, Y на трассе). Приоритет над progress.
-    @Published var liveCoordinatesByDriver: [Int: F1LiveCoordinate] = [:]
-    /// Накопление по водителю для MQTT стрима (только для текущей сессии).
-    private var liveLocationByDriver: [Int: OpenF1Location] = [:]
+    /// Состояние лайв-карты (обновляется часто; подписывается только карта).
+    let liveMapState = LiveMapState()
+    /// Прямое обновление точек без @Published — ноль перерисовок SwiftUI от лайва.
+    weak var liveDotsView: (any LiveDotsViewUpdating)?
+    private var liveDotsCircuitInfo: CircuitInfo?
+    private var liveDotsSize: CGSize?
+    /// Цвет кружка по номеру гонщика (загружаем при старте стрима по session_key).
+    private var liveDriverColors: [Int: UIColor] = [:]
+    /// Имя и команда гонщика по номеру (для топ‑3 в Hero).
+    private var liveDriverNames: [Int: String] = [:]
+    private var liveDriverTeamNames: [Int: String] = [:]
+    /// Стрим включён, когда герой на главном экране или открыт таб Live.
+    @Published var isHeroSectionVisible = true
+    @Published var isLiveViewVisible = false
+    /// Буфер MQTT в акторе — не грузим main thread каждым сообщением.
+    private let liveLocationBuffer = LiveLocationBuffer()
     private var lastLiveStreamSessionKey: Int?
+    private var liveStreamStarted = false
+    /// Таск: раз в 1 с снэпшот → считаем точки → обновляем только UIKit, без SwiftUI.
+    private var liveFlushTask: Task<Void, Never>?
+    /// Опрос позиций в гонке для топ‑3 лидеров (REST OpenF1).
+    private var livePositionsPollTask: Task<Void, Never>?
     @Published var fiaNews: [FIANewsItem] = []
     @Published var isLoaded = false
     @Published var isLoading = false
@@ -213,9 +255,10 @@ final class SeasonDataLoader: ObservableObject {
         displayedResultsMeetingKey = nil
     }
 
-    /// Таймаут загрузки: если за это время не успели — показываем главный экран.
-    private let loadTimeout: Duration = .seconds(25)
+    /// Таймаут загрузки: если за это время не дошли до bootstrap — показываем главный экран.
+    private let loadTimeout: Duration = .seconds(10)
 
+    /// Вся сеть и обработка — в фоне (Task.detached), на main только быстрые обновления состояния (по доке Apple).
     func load() async {
         guard !isLoaded, !isLoading else { return }
         await MainActor.run { isLoading = true }
@@ -226,121 +269,122 @@ final class SeasonDataLoader: ObservableObject {
             if !self.isLoaded { self.isLoaded = true }
         }
 
-        let client = OpenF1Client.shared
-        let year = Calendar.current.component(.year, from: Date())
-        let now = Date()
-        do {
-            let meetings = try await client.meetings(year: year)
-            let raceMeetings = meetings.filter { !$0.meetingName.lowercased().contains("test") }
-            let sortedByDate = raceMeetings.sorted { ($0.parsedDateStart ?? .distantPast) < ($1.parsedDateStart ?? .distantPast) }
-            await MainActor.run { seasonMeetings = sortedByDate }
-
+        await Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self = self else { return }
+            let client = OpenF1Client.shared
+            let year = Calendar.current.component(.year, from: Date())
             let now = Date()
-            // Текущий уик-энд (now между date_start и date_end) или ближайший предстоящий.
-            let currentOrNext = sortedByDate.first { m in
-                let start = m.parsedDateStart ?? .distantPast
-                let end = m.parsedDateEnd ?? .distantFuture
-                return (start <= now && now <= end) || start >= now
-            }
-            let first = currentOrNext ?? sortedByDate.first
-            if let first = first {
-                await MainActor.run { meeting = first }
-                if let url = first.circuitInfoUrl {
-                    let info = try? await client.circuitInfo(urlString: url)
-                    await MainActor.run { circuitInfo = info }
-                }
-            }
+            do {
+                let meetings = try await client.meetings(year: year)
+                let raceMeetings = meetings.filter { !$0.meetingName.lowercased().contains("test") }
+                let sortedByDate = raceMeetings.sorted { ($0.parsedDateStart ?? .distantPast) < ($1.parsedDateStart ?? .distantPast) }
+                await MainActor.run { self.seasonMeetings = sortedByDate }
 
-            var loadedCircuits: [Int: CircuitInfo] = [:]
-            await withTaskGroup(of: (Int, CircuitInfo?).self) { group in
-                for m in raceMeetings {
-                    guard m.circuitInfoUrl != nil else { continue }
-                    let key = m.meetingKey
-                    let meetingUrl = m.circuitInfoUrl
-                    group.addTask {
-                        guard let url = meetingUrl else { return (key, nil) }
-                        let info: CircuitInfo? = try? await client.circuitInfo(urlString: url)
-                        return (key, info.flatMap { $0.x.isEmpty || $0.y.isEmpty ? nil : $0 })
+                let currentOrNext = sortedByDate.first { m in
+                    let start = m.parsedDateStart ?? .distantPast
+                    let end = m.parsedDateEnd ?? .distantFuture
+                    return (start <= now && now <= end) || start >= now
+                }
+                let first = currentOrNext ?? sortedByDate.first
+                if let first = first {
+                    await MainActor.run { self.meeting = first }
+                    // Параллельно: circuitInfo и сессии — MQTT стартует сразу, не ждём circuitInfo.
+                    let circuitTask = first.circuitInfoUrl.map { url in Task { try? await client.circuitInfo(urlString: url) } }
+                    let sessionsTask = Task { try? await client.sessions(meetingKey: first.meetingKey) }
+                    let info: CircuitInfo? = if let t = circuitTask { await t.value } else { nil }
+                    let nextSessions = (await sessionsTask.value) ?? []
+                    await MainActor.run {
+                        if let info = info { self.circuitInfo = info }
+                        self.nextMeetingSessions = nextSessions.sorted { ($0.dateStart ?? "") < ($1.dateStart ?? "") }
+                        self.startLiveStreamIfNeeded()
+                        self.isLoaded = true
                     }
-                }
-                for await (key, info) in group {
-                    if let info = info {
-                        loadedCircuits[key] = info
-                    }
-                }
-            }
-            await MainActor.run { circuitInfoByMeetingKey = loadedCircuits }
-
-            var teamsLoadedFromChampionship = false
-            let lastCompleted = sortedByDate.last { m in
-                (m.parsedDateEnd ?? .distantFuture) < now
-            }
-            if let last = lastCompleted {
-                let sessions = try await client.sessions(meetingKey: last.meetingKey)
-                let raceSession = sessions.first { s in
-                    s.sessionName == "Race" || (s.sessionType?.lowercased().contains("race") == true)
-                }
-                if let race = raceSession {
-                    let standings = try await client.championshipDrivers(sessionKey: race.sessionKey)
-                    let drivers = try await client.drivers(sessionKey: race.sessionKey)
-                    let names = Dictionary(uniqueKeysWithValues: drivers.map { ($0.driverNumber, $0.fullName) })
-                    let top = standings
-                        .sorted { $0.positionCurrent < $1.positionCurrent }
-                        .prefix(5)
-                        .map { row in
-                            (position: row.positionCurrent, name: names[row.driverNumber] ?? "\(row.driverNumber)", points: row.pointsCurrent)
-                        }
-                    await MainActor.run { championshipTop = top }
-                    let teams = try? await client.championshipTeams(sessionKey: race.sessionKey)
-                    let teamsAll = (teams ?? [])
-                        .sorted { $0.positionCurrent < $1.positionCurrent }
-                        .map { (position: $0.positionCurrent, name: $0.teamName, points: $0.pointsCurrent) }
-                    await MainActor.run { championshipTeamsTop = teamsAll }
-                    teamsLoadedFromChampionship = !teamsAll.isEmpty
-                }
-            }
-            if !teamsLoadedFromChampionship {
-                func teamsFromDrivers(_ drivers: [OpenF1Driver]) -> [(position: Int, name: String, points: Int)] {
-                    var seen: Set<String> = []
-                    let names = drivers.compactMap { d -> String? in
-                        guard let name = d.teamName, !name.isEmpty, seen.insert(name).inserted else { return nil }
-                        return name
-                    }
-                    return names.enumerated().map { (position: $0.offset + 1, name: $0.element, points: 0) }
-                }
-                var teamsList: [(position: Int, name: String, points: Int)] = []
-                if let driversLatest = try? await client.driversLatest(), !driversLatest.isEmpty {
-                    teamsList = teamsFromDrivers(driversLatest)
-                }
-                if teamsList.isEmpty, let firstMeeting = raceMeetings.first {
-                    let sessions = (try? await client.sessions(meetingKey: firstMeeting.meetingKey)) ?? []
-                    if let firstSession = sessions.sorted(by: { ($0.dateStart ?? "") < ($1.dateStart ?? "") }).first {
-                        let drivers = (try? await client.drivers(sessionKey: firstSession.sessionKey)) ?? []
-                        teamsList = teamsFromDrivers(drivers)
-                    }
-                }
-                if !teamsList.isEmpty {
-                    await MainActor.run { championshipTeamsTop = teamsList }
                 } else {
-                    let fallback = Self.fallbackSeasonTeams(year: year)
-                    if !fallback.isEmpty {
-                        await MainActor.run { championshipTeamsTop = fallback }
+                    await MainActor.run { self.isLoaded = true }
+                }
+
+                var loadedCircuits: [Int: CircuitInfo] = [:]
+                await withTaskGroup(of: (Int, CircuitInfo?).self) { group in
+                    for m in raceMeetings {
+                        guard m.circuitInfoUrl != nil else { continue }
+                        let key = m.meetingKey
+                        let meetingUrl = m.circuitInfoUrl
+                        group.addTask {
+                            guard let url = meetingUrl else { return (key, nil) }
+                            let info: CircuitInfo? = try? await client.circuitInfo(urlString: url)
+                            return (key, info.flatMap { $0.x.isEmpty || $0.y.isEmpty ? nil : $0 })
+                        }
+                    }
+                    for await (key, info) in group {
+                        if let info = info { loadedCircuits[key] = info }
                     }
                 }
+                await MainActor.run { self.circuitInfoByMeetingKey = loadedCircuits }
+
+                var teamsLoadedFromChampionship = false
+                let lastCompleted = sortedByDate.last { m in (m.parsedDateEnd ?? .distantFuture) < now }
+                if let last = lastCompleted {
+                    let sessions = try await client.sessions(meetingKey: last.meetingKey)
+                    let raceSession = sessions.first { s in
+                        s.sessionName == "Race" || (s.sessionType?.lowercased().contains("race") == true)
+                    }
+                    if let race = raceSession {
+                        let standings = try await client.championshipDrivers(sessionKey: race.sessionKey)
+                        let drivers = try await client.drivers(sessionKey: race.sessionKey)
+                        let names = Dictionary(uniqueKeysWithValues: drivers.map { ($0.driverNumber, $0.fullName) })
+                        let top = standings
+                            .sorted { $0.positionCurrent < $1.positionCurrent }
+                            .prefix(5)
+                            .map { row in (position: row.positionCurrent, name: names[row.driverNumber] ?? "\(row.driverNumber)", points: row.pointsCurrent) }
+                        await MainActor.run { self.championshipTop = top }
+                        let teams = try? await client.championshipTeams(sessionKey: race.sessionKey)
+                        let teamsAll = (teams ?? [])
+                            .sorted { $0.positionCurrent < $1.positionCurrent }
+                            .map { (position: $0.positionCurrent, name: $0.teamName, points: $0.pointsCurrent) }
+                        await MainActor.run { self.championshipTeamsTop = teamsAll }
+                        teamsLoadedFromChampionship = !teamsAll.isEmpty
+                    }
+                }
+                if !teamsLoadedFromChampionship {
+                    func teamsFromDrivers(_ drivers: [OpenF1Driver]) -> [(position: Int, name: String, points: Int)] {
+                        var seen: Set<String> = []
+                        let names = drivers.compactMap { d -> String? in
+                            guard let name = d.teamName, !name.isEmpty, seen.insert(name).inserted else { return nil }
+                            return name
+                        }
+                        return names.enumerated().map { (position: $0.offset + 1, name: $0.element, points: 0) }
+                    }
+                    var teamsList: [(position: Int, name: String, points: Int)] = []
+                    if let driversLatest = try? await client.driversLatest(), !driversLatest.isEmpty {
+                        teamsList = teamsFromDrivers(driversLatest)
+                    }
+                    if teamsList.isEmpty, let firstMeeting = raceMeetings.first {
+                        let sessions = (try? await client.sessions(meetingKey: firstMeeting.meetingKey)) ?? []
+                        if let firstSession = sessions.sorted(by: { ($0.dateStart ?? "") < ($1.dateStart ?? "") }).first {
+                            let drivers = (try? await client.drivers(sessionKey: firstSession.sessionKey)) ?? []
+                            teamsList = teamsFromDrivers(drivers)
+                        }
+                    }
+                    if !teamsList.isEmpty {
+                        await MainActor.run { self.championshipTeamsTop = teamsList }
+                    } else {
+                        let fallback = Self.fallbackSeasonTeams(year: year)
+                        if !fallback.isEmpty { await MainActor.run { self.championshipTeamsTop = fallback } }
+                    }
+                }
+                if let nextMeeting = first {
+                    let sessions = (try? await client.sessions(meetingKey: nextMeeting.meetingKey)) ?? []
+                    await MainActor.run { self.nextMeetingSessions = sessions.sorted { ($0.dateStart ?? "") < ($1.dateStart ?? "") } }
+                }
+                let news = (try? await FIAFeedService.shared.fetchNews()) ?? []
+                await MainActor.run { self.fiaNews = news }
+            } catch {
+                await MainActor.run { self.isLoaded = true }
             }
-            if let nextMeeting = first {
-                let sessions = (try? await client.sessions(meetingKey: nextMeeting.meetingKey)) ?? []
-                await MainActor.run { nextMeetingSessions = sessions.sorted { ($0.dateStart ?? "") < ($1.dateStart ?? "") } }
-            }
-            let news = (try? await FIAFeedService.shared.fetchNews()) ?? []
-            await MainActor.run { fiaNews = news }
-            await MainActor.run { isLoaded = true }
-        } catch {
-            await MainActor.run { isLoaded = true }
-        }
+        }.value
     }
 
-    private static func fallbackSeasonTeams(year: Int) -> [(position: Int, name: String, points: Int)] {
+    private nonisolated static func fallbackSeasonTeams(year: Int) -> [(position: Int, name: String, points: Int)] {
         let names = [
             "Red Bull Racing", "Ferrari", "McLaren", "Mercedes", "Aston Martin",
             "Alpine", "Williams", "Racing Bulls", "Haas", "Kick Sauber"
@@ -348,46 +392,207 @@ final class SeasonDataLoader: ObservableObject {
         return names.enumerated().map { (position: $0.offset + 1, name: $0.element, points: 0) }
     }
 
-    /// Обновление позиции из MQTT (вызывается на MainActor). Только текущая сессия; при смене сессии сбрасываем кэш.
-    func mergeLiveLocation(_ loc: OpenF1Location) {
-        let current = currentLiveSessionKey()
-        guard let current = current, loc.sessionKey == current else { return }
-        if current != lastLiveStreamSessionKey {
+    /// Лайв только OpenF1 MQTT. MQTT пишет в актор (не main), UI обновляется по таймеру — без лагов.
+    func startLiveStreamIfNeeded() {
+        guard !liveStreamStarted else { return }
+        liveStreamStarted = true
+        let sessionKeyToUse: Int?
+        if let current = currentLiveSessionKey() {
             lastLiveStreamSessionKey = current
-            liveLocationByDriver = [:]
-            print("[Live] MQTT merge session=\(current) drivers=\(liveLocationByDriver.count)")
+            sessionKeyToUse = current
+            print("[Live] MQTT session=\(current)")
+        } else {
+            sessionKeyToUse = nil
         }
-        liveLocationByDriver[loc.driverNumber] = loc
-        liveLocations = Array(liveLocationByDriver.values)
+
+        // Принимаем все сообщения MQTT — не фильтруем по session_key, чтобы лайв всегда показывал данные.
+        OpenF1LiveMQTTService.shared.onLocation = { [weak self] loc in
+            guard let self = self else { return }
+            Task { await self.liveLocationBuffer.add(loc) }
+        }
+        Task { await OpenF1LiveMQTTService.shared.connect() }
+        let skForColors = sessionKeyToUse ?? nextMeetingSessions.first?.sessionKey
+        if let sk = skForColors {
+            Task { await loadLiveDriverColors(sessionKey: sk) }
+        }
+
+        // Топ‑3 лидеров — из API позиций (реальный порядок в гонке), не по прогрессу на трассе.
+        startLivePositionsPoll(sessionKey: sessionKeyToUse ?? skForColors)
+
+        // Часть 1: locations каждые 8 ms. Часть 2: кэш circuitInfo/view обновляем каждые 48 ms; кружки на карте — каждые 8 ms по кэшу.
+        var cachedInfo: CircuitInfo?
+        var cachedSize: CGSize?
+        var cachedView: (any LiveDotsViewUpdating)?
+        var cachedPointsByDriver: [Int: CGPoint] = [:]
+        var tick = 0
+        liveFlushTask = Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self = self else { return }
+            while !Task.isCancelled {
+                let snapshot = await self.liveLocationBuffer.snapshot()
+
+                // Всегда пушим locations и версию — карта обновляется часто.
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self else { return }
+                    self.liveMapState.locations = snapshot
+                    self.liveMapState.locationsVersion &+= 1
+                    self.objectWillChange.send()
+                }
+
+                let doHeavy = (tick % 6 == 0)
+                tick += 1
+
+                if doHeavy {
+                    let ctx = await MainActor.run {
+                        (self.liveDotsCircuitInfo, self.liveDotsSize, self.liveDotsView, self.circuitInfo)
+                    }
+                    cachedInfo = ctx.0 ?? ctx.3
+                    cachedSize = ctx.1 ?? (ctx.2 != nil ? CGSize(width: 400, height: 250) : nil)
+                    cachedView = ctx.2
+                }
+
+                // Кружки на карте обновляем каждые 8 ms (по кэшу circuitInfo/view), чтобы не ждать 48 ms.
+                if let info = cachedInfo, let size = cachedSize, let view = cachedView, !snapshot.isEmpty {
+                    let latestByDriver = Self.latestByDriver(from: snapshot)
+                    let driverNumbers = latestByDriver.keys.sorted()
+                    for driverNum in driverNumbers {
+                        guard let (x, y) = latestByDriver[driverNum] else { continue }
+                        cachedPointsByDriver[driverNum] = Self.computeOnePoint(trackX: x, trackY: y, circuitInfo: info, size: size)
+                    }
+                    cachedPointsByDriver = cachedPointsByDriver.filter { latestByDriver[$0.key] != nil }
+                    let points = driverNumbers.compactMap { cachedPointsByDriver[$0] }
+                    let driverNumbersCopy = driverNumbers
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self = self else { return }
+                        let colors = driverNumbersCopy.map { self.liveDriverColors[$0] ?? .gray }
+                        view.setPositions(points, colors: colors)
+                    }
+                }
+
+                try? await Task.sleep(nanoseconds: 8_333_333)
+            }
+        }
     }
 
-    /// Запуск лайва только через официальный F1 (SignalR Position.z). OpenF1 для карты не используем.
-    func startLiveStreamIfNeeded() {
-        F1LiveTimingSignalRService.shared.onCoordinates = { [weak self] coords in
-            Task { @MainActor in
-                guard let self = self else { return }
-                self.liveCoordinatesByDriver = coords
-                self.livePositionProgressByDriver = [:]
-                if !coords.isEmpty { print("[F1Live] loader got \(coords.count) coordinates (real)") }
+    /// Последняя позиция по каждому гонщику из снэпшота.
+    private nonisolated static func latestByDriver(from snapshot: [OpenF1Location]) -> [Int: (Int, Int)] {
+        Dictionary(grouping: snapshot) { $0.driverNumber }
+            .compactMapValues { locs in
+                guard let last = locs.max(by: { $0.date < $1.date }) else { return nil }
+                return (last.x, last.y)
+            }
+    }
+
+    /// Топ‑3 номера гонщиков по прогрессу вдоль трассы (лидер первым). Координаты как в OpenF1/circuit_info.
+    private nonisolated static func top3DriverNumbersByProgress(snapshot: [OpenF1Location], circuitInfo: CircuitInfo) -> [Int] {
+        let latest = latestByDriver(from: snapshot)
+        let withProgress: [(Int, CGFloat)] = latest.compactMap { (driverNum, xy) in
+            let p = circuitInfo.progressAlongTrack(trackX: xy.0, trackY: xy.1)
+            return (driverNum, p)
+        }
+        return withProgress.sorted { $0.1 > $1.1 }.prefix(3).map(\.0)
+    }
+
+    /// Позиция на карте по координатам OpenF1 (trackX, trackY). Проекция на трассу. Координаты в одной системе с circuit_info (OpenF1 doc).
+    private nonisolated static func computeOnePoint(trackX: Int, trackY: Int, circuitInfo: CircuitInfo, size: CGSize) -> CGPoint {
+        let (u, v) = circuitInfo.normalizedUVProjected(trackX: trackX, trackY: trackY)
+        let uClamp = min(1, max(0, CGFloat(u)))
+        let vClamp = min(1, max(0, CGFloat(v)))
+        return CGPoint(x: uClamp * size.width, y: (1 - vClamp) * size.height)
+    }
+
+    /// Полный расчёт всех точек (для первого кадра или fallback).
+    private nonisolated static func computeDotsPoints(snapshot: [OpenF1Location], circuitInfo: CircuitInfo, size: CGSize) -> [CGPoint] {
+        let latest = latestByDriver(from: snapshot)
+        return latest.keys.sorted().compactMap { driverNum in
+            guard let (x, y) = latest[driverNum] else { return nil }
+            return computeOnePoint(trackX: x, trackY: y, circuitInfo: circuitInfo, size: size)
+        }
+    }
+
+    private func loadLiveDriverColors(sessionKey: Int) async {
+        let drivers = (try? await OpenF1Client.shared.drivers(sessionKey: sessionKey)) ?? []
+        await MainActor.run {
+            for d in drivers {
+                let team = d.teamName ?? ""
+                liveDriverColors[d.driverNumber] = Self.uiColor(forTeam: team)
+                liveDriverNames[d.driverNumber] = d.fullName ?? d.broadcastName ?? "#\(d.driverNumber)"
+                liveDriverTeamNames[d.driverNumber] = team
             }
         }
-        F1LiveTimingSignalRService.shared.onPositions = { [weak self] positions in
-            Task { @MainActor in
-                guard let self = self else { return }
-                if !self.liveCoordinatesByDriver.isEmpty { return }
-                self.livePositionProgressByDriver = positions
-                if !positions.isEmpty { print("[F1Live] loader got \(positions.count) positions") }
+    }
+
+    private static func uiColor(forTeam teamName: String) -> UIColor {
+        let lower = teamName.lowercased()
+        if lower.contains("red bull"), !lower.contains("racing bulls") { return UIColor(red: 20/255, green: 41/255, blue: 72/255, alpha: 1) }
+        if lower.contains("racing bulls") || lower.contains("rb ") || lower == "rb" { return UIColor(red: 0/255, green: 56/255, blue: 194/255, alpha: 1) }
+        if lower.contains("ferrari") { return UIColor(red: 92/255, green: 0/255, blue: 18/255, alpha: 1) }
+        if lower.contains("mclaren") { return UIColor(red: 128/255, green: 64/255, blue: 0/255, alpha: 1) }
+        if lower.contains("mercedes") { return UIColor(red: 6/255, green: 126/255, blue: 106/255, alpha: 1) }
+        if lower.contains("aston martin") { return UIColor(red: 15/255, green: 67/255, blue: 49/255, alpha: 1) }
+        if lower.contains("alpine") { return UIColor(red: 0/255, green: 78/255, blue: 112/255, alpha: 1) }
+        if lower.contains("williams") { return UIColor(red: 8/255, green: 33/255, blue: 69/255, alpha: 1) }
+        if lower.contains("haas") { return UIColor(red: 102/255, green: 113/255, blue: 117/255, alpha: 1) }
+        if lower.contains("sauber") || lower.contains("kick") || lower.contains("stake") { return UIColor(red: 102/255, green: 113/255, blue: 117/255, alpha: 1) }
+        if lower.contains("audi") { return UIColor(red: 117/255, green: 21/255, blue: 0/255, alpha: 1) }
+        if lower.contains("cadillac") { return UIColor(red: 88/255, green: 88/255, blue: 91/255, alpha: 1) }
+        return .gray
+    }
+
+    func registerLiveDotsView(_ view: some LiveDotsViewUpdating, circuitInfo: CircuitInfo?, size: CGSize) {
+        liveDotsView = view
+        liveDotsCircuitInfo = circuitInfo
+        liveDotsSize = size
+    }
+
+    /// Топ‑3 лидеров из API позиций (реальный порядок в гонке). Опрос раз в ~1.5 с.
+    private func startLivePositionsPoll(sessionKey initialSk: Int?) {
+        livePositionsPollTask?.cancel()
+        livePositionsPollTask = Task.detached(priority: .utility) { [weak self] in
+            guard let self = self else { return }
+            while !Task.isCancelled {
+                let sk = await MainActor.run {
+                    self.currentLiveSessionKey() ?? self.lastLiveStreamSessionKey ?? self.nextMeetingSessions.first?.sessionKey ?? initialSk
+                }
+                if let sk = sk {
+                    let list = (try? await OpenF1Client.shared.positions(sessionKey: sk)) ?? []
+                    // Последняя запись по каждому гонщику (по date), затем сортировка по position — это реальный порядок в гонке.
+                    let byDriver: [Int: OpenF1Position] = list.reduce(into: [:]) { acc, p in
+                        if acc[p.driverNumber] == nil || (p.date > acc[p.driverNumber]!.date) { acc[p.driverNumber] = p }
+                    }
+                    let sorted = byDriver.values.sorted { $0.position < $1.position }
+                    let top3 = Array(sorted.prefix(3))
+                    await MainActor.run { [weak self] in
+                        guard let self = self else { return }
+                        let names = self.liveDriverNames
+                        let teams = self.liveDriverTeamNames
+                        self.liveMapState.top3LiveDrivers = top3.enumerated().map { idx, p in
+                            (idx + 1, p.driverNumber, names[p.driverNumber] ?? "#\(p.driverNumber)", teams[p.driverNumber] ?? "")
+                        }
+                        self.objectWillChange.send()
+                    }
+                }
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
             }
         }
-        Task { await F1LiveTimingSignalRService.shared.connect() }
     }
 
     func stopLiveStream() {
-        F1LiveTimingSignalRService.shared.onCoordinates = nil
-        F1LiveTimingSignalRService.shared.onPositions = nil
-        F1LiveTimingSignalRService.shared.disconnect()
-        liveCoordinatesByDriver = [:]
-        livePositionProgressByDriver = [:]
+        liveStreamStarted = false
+        liveFlushTask?.cancel()
+        liveFlushTask = nil
+        livePositionsPollTask?.cancel()
+        livePositionsPollTask = nil
+        OpenF1LiveMQTTService.shared.onLocation = nil
+        OpenF1LiveMQTTService.shared.disconnect()
+        Task { await liveLocationBuffer.reset() }
+        liveDotsView?.setPositions([], colors: [])
+        liveDriverColors = [:]
+        liveDriverNames = [:]
+        liveDriverTeamNames = [:]
+        liveMapState.coordinatesByDriver = [:]
+        liveMapState.positionProgressByDriver = [:]
+        liveMapState.locations = []
+        liveMapState.top3LiveDrivers = []
     }
 
     /// session_key сессии, которая идёт сейчас (now между date_start и date_end), или nil.

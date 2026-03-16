@@ -73,16 +73,21 @@ struct HomeView: View {
                 }
             }
             .task {
-                // Лайв только через официальный F1 (livetiming.formula1.com SignalR). OpenF1 для карты не используем.
+                // Проверка видимости hero / Live каждую 1 с — стрим включён, если на экране Home hero или таб Live.
                 while !Task.isCancelled {
-                    if await MainActor.run(body: { loader.meeting }) != nil {
+                    let (meeting, heroVisible, liveVisible) = await MainActor.run {
+                        (loader.meeting, loader.isHeroSectionVisible, loader.isLiveViewVisible)
+                    }
+                    if meeting != nil && (heroVisible || liveVisible) {
                         loader.startLiveStreamIfNeeded()
                     } else {
                         loader.stopLiveStream()
                     }
-                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
                 }
             }
+            .onAppear { loader.isHeroSectionVisible = true }
+            .onDisappear { loader.isHeroSectionVisible = false }
         }
     }
 
@@ -247,11 +252,38 @@ struct HomeView: View {
     }
 
     private var heroLeftContentView: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if let m = loader.meeting {
-                    Text(m.meetingName)
-                        .font(Font.custom(FontWeight.titilliumWebSemiBold.rawValue, size: 16))
-                        .foregroundStyle(.white)
+        let top3 = loader.liveMapState.top3LiveDrivers
+        let hasLocations = !loader.liveMapState.locations.isEmpty
+        let isLiveNow = hasLocations
+        return VStack(alignment: .leading, spacing: 6) {
+            if isLiveNow {
+                Text("Live")
+                    .font(Font.custom(FontWeight.titilliumWebSemiBold.rawValue, size: 13))
+                    .foregroundStyle(.white.opacity(0.85))
+                if !top3.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(top3, id: \.driverNumber) { row in
+                            HStack(spacing: 8) {
+                                Circle()
+                                    .fill(teamColor(for: row.teamName))
+                                    .frame(width: 14, height: 14)
+                                Text("\(row.position). \(row.name)")
+                                    .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 13))
+                                    .foregroundStyle(.white)
+                                    .lineLimit(1)
+                                Spacer()
+                            }
+                        }
+                    }
+                } else {
+                    Text("\(loader.liveMapState.locations.count) машин на трассе")
+                        .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 12))
+                        .foregroundStyle(.white.opacity(0.8))
+                }
+            } else if let m = loader.meeting {
+                Text(m.meetingName)
+                    .font(Font.custom(FontWeight.titilliumWebSemiBold.rawValue, size: 16))
+                    .foregroundStyle(.white)
                     .lineLimit(2)
                 if let str = heroGpDateString(m) {
                     Text(str)
@@ -385,29 +417,10 @@ struct HomeView: View {
     private var heroCircuitMapView: some View {
         Group {
             if let m = loader.meeting {
-                let size = CGSize(width: 208, height: 130)
-                ZStack(alignment: .topLeading) {
-                    TrackMapView(
-                        circuitInfo: loader.circuitInfo,
-                        imageURL: m.circuitImage,
-                        localTrackImageName: nil,
-                        compact: true,
-                        compactSize: size,
-                        strokeColor: .white,
-                        cardBackground: .clear
-                    )
-                    .frame(width: size.width, height: size.height)
-                    LiveCircuitDotsOverlay(
-                        circuitInfo: loader.circuitInfo,
-                        locations: loader.liveLocations,
-                        positionProgressByDriver: loader.livePositionProgressByDriver,
-                        coordinatesByDriver: loader.liveCoordinatesByDriver,
-                        size: size
-                    )
-                    .zIndex(1)
-                    .id("\(loader.liveCoordinatesByDriver.count)-\(loader.livePositionProgressByDriver.count)" + (loader.circuitInfo != nil ? "c" : "n"))
-                }
-                .frame(width: size.width, height: size.height)
+                HeroCircuitMapWithDotsView(
+                    circuitInfo: loader.circuitInfo,
+                    meeting: m
+                )
             }
         }
         .fixedSize(horizontal: true, vertical: true)
@@ -1014,7 +1027,135 @@ private struct FIANewsCard: View {
     }
 }
 
-/// Кружки позиций машин на карте трассы при прямой трансляции.
+/// Герой-карта с точками. Точки обновляются через UIKit (loader.registerLiveDotsView) — без @Published и без лагов SwiftUI.
+private struct HeroCircuitMapWithDotsView: View {
+    @EnvironmentObject var loader: SeasonDataLoader
+    var circuitInfo: CircuitInfo?
+    var meeting: OpenF1Meeting
+
+    private let size = CGSize(width: 208, height: 130)
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            TrackMapView(
+                circuitInfo: circuitInfo,
+                imageURL: meeting.circuitImage,
+                localTrackImageName: nil,
+                compact: true,
+                compactSize: size,
+                strokeColor: .white,
+                cardBackground: .clear
+            )
+            .frame(width: size.width, height: size.height)
+            LiveCircuitDotsUIKitView(loader: loader, circuitInfo: circuitInfo, size: size)
+                .zIndex(1)
+        }
+        .frame(width: size.width, height: size.height)
+    }
+}
+
+/// Точки на карте: целевые позиции приходят ~40 раз/с, отрисовка 60 FPS с плавной интерполяцией из точки в точку.
+private final class LiveDotsUIView: UIView, LiveDotsViewUpdating {
+    private var targetPositions: [CGPoint] = []
+    private var displayPositions: [CGPoint] = []
+    private let dotRadius: CGFloat = 5
+    private var displayLink: CADisplayLink?
+    private let lerpFactor: CGFloat = 0.75
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        commonInit()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        commonInit()
+    }
+
+    private func commonInit() {
+        let link = CADisplayLink(target: self, selector: #selector(tick))
+        link.add(to: .main, forMode: .common)
+        displayLink = link
+    }
+
+    @objc private func tick() {
+        let n = targetPositions.count
+        if n == 0 {
+            if !displayPositions.isEmpty {
+                displayPositions = []
+                setNeedsDisplay()
+            }
+            return
+        }
+        if displayPositions.count != n {
+            displayPositions = targetPositions
+            setNeedsDisplay()
+            return
+        }
+        var changed = false
+        for i in 0..<n {
+            let t = targetPositions[i]
+            let d = displayPositions[i]
+            let dx = (t.x - d.x) * lerpFactor
+            let dy = (t.y - d.y) * lerpFactor
+            if abs(dx) > 0.005 || abs(dy) > 0.005 { changed = true }
+            displayPositions[i].x = d.x + dx
+            displayPositions[i].y = d.y + dy
+        }
+        if changed { setNeedsDisplay() }
+    }
+
+    private var dotColors: [UIColor] = []
+
+    func setPositions(_ positions: [CGPoint], colors: [UIColor]) {
+        targetPositions = positions
+        dotColors = colors.count == positions.count ? colors : (0..<positions.count).map { _ in UIColor.gray }
+        if displayPositions.count != positions.count {
+            displayPositions = positions
+        }
+    }
+
+    override func draw(_ rect: CGRect) {
+        guard let ctx = UIGraphicsGetCurrentContext() else { return }
+        let w = bounds.width
+        let h = bounds.height
+        guard w > 1, h > 1 else { return }
+        for (i, p) in displayPositions.enumerated() {
+            let fillColor = i < dotColors.count ? dotColors[i].cgColor : UIColor.gray.cgColor
+            let r = CGRect(x: p.x - dotRadius, y: p.y - dotRadius, width: dotRadius * 2, height: dotRadius * 2)
+            ctx.setFillColor(fillColor)
+            ctx.fillEllipse(in: r)
+            ctx.setStrokeColor(UIColor.white.cgColor)
+            ctx.setLineWidth(1)
+            ctx.strokeEllipse(in: r)
+        }
+    }
+
+    deinit {
+        displayLink?.invalidate()
+        displayLink = nil
+    }
+}
+
+private struct LiveCircuitDotsUIKitView: UIViewRepresentable {
+    var loader: SeasonDataLoader
+    var circuitInfo: CircuitInfo?
+    var size: CGSize
+
+    func makeUIView(context: Context) -> LiveDotsUIView {
+        let v = LiveDotsUIView()
+        v.backgroundColor = .clear
+        v.isOpaque = false
+        loader.registerLiveDotsView(v, circuitInfo: circuitInfo, size: size)
+        return v
+    }
+
+    func updateUIView(_ uiView: LiveDotsUIView, context: Context) {
+        loader.registerLiveDotsView(uiView, circuitInfo: circuitInfo, size: size)
+    }
+}
+
+/// Кружки позиций машин на карте трассы при прямой трансляции (SwiftUI Canvas — оставлен для других экранов при необходимости).
 /// Приоритет: 1) coordinatesByDriver (реальные X,Y из Position.z по подписке), 2) positionProgressByDriver, 3) locations (OpenF1).
 /// Координаты как в CircuitPathShape: x = u*w, y = (1-v)*h.
 private struct LiveCircuitDotsOverlay: View {
@@ -1025,7 +1166,7 @@ private struct LiveCircuitDotsOverlay: View {
     var coordinatesByDriver: [Int: F1LiveCoordinate] = [:]
     var size: CGSize
 
-    private static let dotRadius: CGFloat = 10
+    private static let dotRadius: CGFloat = 5
 
     private var latestByDriver: [(driverNumber: Int, x: Int, y: Int)] {
         let byDriver = Dictionary(grouping: locations) { $0.driverNumber }
@@ -1050,7 +1191,7 @@ private struct LiveCircuitDotsOverlay: View {
                     let sy = (1 - vClamp) * h
                     let rect = CGRect(x: sx - Self.dotRadius, y: sy - Self.dotRadius, width: Self.dotRadius * 2, height: Self.dotRadius * 2)
                     context.fill(Path(ellipseIn: rect), with: .color(.red))
-                    context.stroke(Path(ellipseIn: rect), with: .color(.white), style: StrokeStyle(lineWidth: 2))
+                    context.stroke(Path(ellipseIn: rect), with: .color(.white), style: StrokeStyle(lineWidth: 1))
                 }
             } else if !positionProgressByDriver.isEmpty, let info = circuitInfo {
                 for (_, progress) in positionProgressByDriver {
@@ -1061,7 +1202,7 @@ private struct LiveCircuitDotsOverlay: View {
                     let sy = (1 - vClamp) * h
                     let rect = CGRect(x: sx - Self.dotRadius, y: sy - Self.dotRadius, width: Self.dotRadius * 2, height: Self.dotRadius * 2)
                     context.fill(Path(ellipseIn: rect), with: .color(.red))
-                    context.stroke(Path(ellipseIn: rect), with: .color(.white), style: StrokeStyle(lineWidth: 2))
+                    context.stroke(Path(ellipseIn: rect), with: .color(.white), style: StrokeStyle(lineWidth: 1))
                 }
             } else if !positionProgressByDriver.isEmpty {
                 let sorted = positionProgressByDriver.sorted { $0.key < $1.key }
@@ -1071,7 +1212,7 @@ private struct LiveCircuitDotsOverlay: View {
                     let sy = h - Self.dotRadius
                     let rect = CGRect(x: sx - Self.dotRadius, y: sy - Self.dotRadius, width: Self.dotRadius * 2, height: Self.dotRadius * 2)
                     context.fill(Path(ellipseIn: rect), with: .color(.red))
-                    context.stroke(Path(ellipseIn: rect), with: .color(.white), style: StrokeStyle(lineWidth: 2))
+                    context.stroke(Path(ellipseIn: rect), with: .color(.white), style: StrokeStyle(lineWidth: 1))
                 }
             } else if let info = circuitInfo {
                 for item in latestByDriver {
@@ -1082,13 +1223,12 @@ private struct LiveCircuitDotsOverlay: View {
                     let sy = (1 - vClamp) * h
                     let rect = CGRect(x: sx - Self.dotRadius, y: sy - Self.dotRadius, width: Self.dotRadius * 2, height: Self.dotRadius * 2)
                     context.fill(Path(ellipseIn: rect), with: .color(.red))
-                    context.stroke(Path(ellipseIn: rect), with: .color(.white), style: StrokeStyle(lineWidth: 2))
+                    context.stroke(Path(ellipseIn: rect), with: .color(.white), style: StrokeStyle(lineWidth: 1))
                 }
             }
         }
         .frame(width: size.width, height: size.height)
         .allowsHitTesting(false)
-        .id(coordinatesByDriver.count.description + positionProgressByDriver.map { "\($0.key):\($0.value)" }.joined(separator: "|"))
     }
 }
 

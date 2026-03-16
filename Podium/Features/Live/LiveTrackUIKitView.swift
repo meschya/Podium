@@ -44,7 +44,7 @@ private struct LiveTrackUIKitRepresentable: UIViewRepresentable {
         if !locations.isEmpty, let info = circuitInfo {
             apiPositions = drivers.reduce(into: [:]) { r, d in
                 if let (tx, ty) = locations[d.driverNumber] {
-                    let (u, v) = info.normalizedUV(trackX: tx, trackY: ty)
+                    let (u, v) = info.normalizedUVProjected(trackX: tx, trackY: ty)
                     r[d.driverNumber] = (u, CGFloat(1 - v))
                 }
             }
@@ -92,7 +92,7 @@ private final class TrackUIView: UIView {
     private var targetPositions: [Int: (CGFloat, CGFloat)] = [:]
     private let spacing: CGFloat = 0.048
     private let dotRadius: CGFloat = 8
-    private let lerpFactor: CGFloat = 0.18
+    private let lerpFactor: CGFloat = 0.5
 
     private var displayLink: CADisplayLink?
     private var pathLengths: [CGFloat] = []

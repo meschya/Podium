@@ -8,6 +8,7 @@
 import SwiftUI
 
 struct LiveView: View {
+    @EnvironmentObject var loader: SeasonDataLoader
     @State private var session: OpenF1Session?
     @State private var meeting: OpenF1Meeting?
     @State private var drivers: [OpenF1Driver] = []
@@ -18,8 +19,6 @@ struct LiveView: View {
     @State private var championshipTeams: [OpenF1ChampionshipTeam] = []
     @State private var pitStops: [OpenF1Pit] = []
     @State private var circuitInfo: CircuitInfo?
-    @State private var liveLocations: [Int: (x: Int, y: Int)] = [:]
-    @State private var liveLocationsVersion: Int = 0
     @State private var isLoading = true
     @State private var errorMessage: String?
     /// Кэш standings, чтобы не пересчитывать при каждой перерисовке.
@@ -37,6 +36,13 @@ struct LiveView: View {
             let team = drivers.first(where: { $0.driverNumber == item.driverNumber })?.teamName ?? ""
             return (item.driverNumber, item.position, teamColor(team), team)
         }
+    }
+
+    /// Live‑координаты для карты из MQTT OpenF1: последний location по каждому гонщику.
+    private var liveLocationsFromMQTT: [Int: (x: Int, y: Int)] {
+        Dictionary(uniqueKeysWithValues: loader.liveMapState.locations.map { loc in
+            (loc.driverNumber, (loc.x, loc.y))
+        })
     }
 
     var body: some View {
@@ -69,18 +75,20 @@ struct LiveView: View {
                                     Text("Live")
                                         .font(Font.custom(FontWeight.titilliumWebSemiBold.rawValue, size: 15))
                                         .foregroundStyle(.secondary)
-                                    LiveTrackView(
-                                        circuitInfo: circuitInfo,
-                                        drivers: liveTrackDrivers,
-                                        locations: liveLocations,
-                                        progress: 0,
-                                        locationsVersion: liveLocationsVersion,
-                                        animationDate: nil
-                                    )
+                                    TimelineView(.animation(minimumInterval: 0.016, paused: false)) { ctx in
+                                        LiveTrackView(
+                                            circuitInfo: circuitInfo,
+                                            drivers: liveTrackDrivers,
+                                            locations: liveLocationsFromMQTT,
+                                            progress: 0,
+                                            locationsVersion: loader.liveMapState.locationsVersion,
+                                            animationDate: ctx.date
+                                        )
+                                    }
                                     .frame(maxWidth: .infinity)
                                     .frame(height: 220)
-                                    if !liveLocations.isEmpty {
-                                        Text("Позиции с трассы из Open F1 API (обновление каждые 2 сек)")
+                                    if !loader.liveMapState.locations.isEmpty {
+                                        Text("Позиции с трассы из Open F1 MQTT (реальный стрим)")
                                             .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 11))
                                             .foregroundStyle(.tertiary)
                                     }
@@ -90,7 +98,7 @@ struct LiveView: View {
                                 LiveStandingsSectionView(
                                     cachedLiveStandings: cachedLiveStandings,
                                     driverLookup: driverLookupCache,
-                                    locationsVersion: liveLocationsVersion
+                                    locationsVersion: loader.liveMapState.locationsVersion
                                 )
                             }
                         }
@@ -104,35 +112,15 @@ struct LiveView: View {
             .navigationBarTitleDisplayMode(.large)
             .task { loadData() }
             .refreshable { loadData() }
-            .task(id: session?.sessionKey) {
-                guard let sk = session?.sessionKey else { return }
-                try? await Task.sleep(nanoseconds: 2_500_000_000)
-                while !Task.isCancelled {
-                    await fetchLiveLocations(sessionKey: sk)
-                    try? await Task.sleep(nanoseconds: 2_000_000_000)
-                }
-            }
+            .onAppear { loader.isLiveViewVisible = true }
+            .onDisappear { loader.isLiveViewVisible = false }
+            // Координаты для карты теперь приходят из OpenF1 MQTT через SeasonDataLoader.liveMapState.
             .task(id: cachedLiveStandings.isEmpty) {
                 guard !cachedLiveStandings.isEmpty else { return }
                 try? await Task.sleep(nanoseconds: 400_000_000)
                 showTrackMap = true
             }
         }
-    }
-
-    /// Open F1 Location API: позиции машин (x, y) на трассе, ~3.7 Hz. Опрос раз в 2 сек — кружки двигаются по данным API.
-    private func fetchLiveLocations(sessionKey: Int) async {
-        do {
-            let list = try await client.location(sessionKey: sessionKey)
-            let latest = Dictionary(
-                list.sorted { $0.date > $1.date }.map { ($0.driverNumber, ($0.x, $0.y)) },
-                uniquingKeysWith: { first, _ in first }
-            )
-            await MainActor.run {
-                liveLocations = latest
-                liveLocationsVersion += 1
-            }
-        } catch { }
     }
 
     private func sessionCard(session s: OpenF1Session, meeting m: OpenF1Meeting) -> some View {
