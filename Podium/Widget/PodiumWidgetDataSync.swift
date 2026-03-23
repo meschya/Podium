@@ -38,6 +38,13 @@ enum PodiumWidgetDataSync {
         static let points = "widget.constructor.points"
         static let accentHex = "widget.constructor.accentHex"
         static let bolidAsset = "widget.constructor.bolidAsset"
+        static let upcomingCity = "widget.upcoming.city"
+        static let upcomingCountry = "widget.upcoming.country"
+        static let upcomingDateText = "widget.upcoming.dateText"
+        static let upcomingEventName = "widget.upcoming.eventName"
+        static let upcomingTrackAsset = "widget.upcoming.trackAsset"
+        static let upcomingCircuitName = "widget.upcoming.circuitName"
+        static let upcomingTrackFilePath = "widget.upcoming.trackFilePath"
     }
 
     static func pushConstructorLeader(position: Int, teamName: String, points: Int, accentColor: Color?) {
@@ -52,6 +59,40 @@ enum PodiumWidgetDataSync {
         WidgetCenter.shared.reloadTimelines(ofKind: "com.EMYM.Podium.championship")
         // Тот же билд — обновить снапшот виджета гонщика (портрет), иначе iOS может долго держать старый кэш.
         WidgetCenter.shared.reloadTimelines(ofKind: "com.EMYM.Podium.driverLeader.faceCropV4TallPortrait")
+    }
+
+    static func pushUpcomingRace(city: String, country: String, eventDate: Date, eventName: String, circuitNameOrLocation: String?) {
+        guard let defaults = UserDefaults(suiteName: suite) else { return }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = .current
+        f.dateFormat = "MMM d, HH:mm a"
+
+        defaults.set(city, forKey: Keys.upcomingCity)
+        defaults.set(country, forKey: Keys.upcomingCountry)
+        defaults.set(f.string(from: eventDate), forKey: Keys.upcomingDateText)
+        defaults.set(eventName, forKey: Keys.upcomingEventName)
+        let trackAssetName = String.AppImage.trackImage(circuitName: circuitNameOrLocation)
+        defaults.set(trackAssetName, forKey: Keys.upcomingTrackAsset)
+        defaults.set(circuitNameOrLocation, forKey: Keys.upcomingCircuitName)
+
+        // В виджете нет каталога Tracks, поэтому публикуем PNG в App Group и показываем его оттуда.
+        if let trackAssetName,
+           let image = UIImage(named: trackAssetName),
+           let data = image.pngData(),
+           let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: suite) {
+            let fileURL = container.appendingPathComponent("upcoming_track_map.png")
+            do {
+                try data.write(to: fileURL, options: .atomic)
+                defaults.set(fileURL.path, forKey: Keys.upcomingTrackFilePath)
+            } catch {
+                defaults.removeObject(forKey: Keys.upcomingTrackFilePath)
+            }
+        } else {
+            defaults.removeObject(forKey: Keys.upcomingTrackFilePath)
+        }
+
+        WidgetCenter.shared.reloadTimelines(ofKind: "com.EMYM.Podium.upcomingRaceTrack")
     }
 
     private static func hexString(from color: Color) -> String {

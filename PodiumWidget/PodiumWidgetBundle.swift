@@ -11,5 +11,6 @@ struct PodiumWidgetBundle: WidgetBundle {
     var body: some Widget {
         ChampionshipWidget()
         DriverLeaderWidget()
+        UpcomingRaceTrackWidget()
     }
 }

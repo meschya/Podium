@@ -22,4 +22,12 @@ enum WidgetKeys {
     static let driverPoints = "widget.driver.points"
     static let driverTeam = "widget.driver.team"
     static let driverPhotoAsset = "widget.driver.photoAsset"
+
+    static let upcomingCity = "widget.upcoming.city"
+    static let upcomingCountry = "widget.upcoming.country"
+    static let upcomingDateText = "widget.upcoming.dateText"
+    static let upcomingEventName = "widget.upcoming.eventName"
+    static let upcomingTrackAsset = "widget.upcoming.trackAsset"
+    static let upcomingCircuitName = "widget.upcoming.circuitName"
+    static let upcomingTrackFilePath = "widget.upcoming.trackFilePath"
 }

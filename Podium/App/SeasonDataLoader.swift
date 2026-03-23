@@ -296,6 +296,7 @@ final class SeasonDataLoader: ObservableObject {
                     await MainActor.run {
                         if let info = info { self.circuitInfo = info }
                         self.nextMeetingSessions = nextSessions.sorted { ($0.dateStart ?? "") < ($1.dateStart ?? "") }
+                        self.syncUpcomingRaceWidget()
                         self.startLiveStreamIfNeeded()
                         self.isLoaded = true
                     }
@@ -385,7 +386,10 @@ final class SeasonDataLoader: ObservableObject {
                 }
                 if let nextMeeting = first {
                     let sessions = (try? await client.sessions(meetingKey: nextMeeting.meetingKey)) ?? []
-                    await MainActor.run { self.nextMeetingSessions = sessions.sorted { ($0.dateStart ?? "") < ($1.dateStart ?? "") } }
+                    await MainActor.run {
+                        self.nextMeetingSessions = sessions.sorted { ($0.dateStart ?? "") < ($1.dateStart ?? "") }
+                        self.syncUpcomingRaceWidget()
+                    }
                 }
                 let news = (try? await FIAFeedService.shared.fetchNews()) ?? []
                 await MainActor.run { self.fiaNews = news }
@@ -651,5 +655,41 @@ final class SeasonDataLoader: ObservableObject {
         f.timeZone = TimeZone(identifier: "UTC")
         f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
         return f.date(from: String(s.prefix(19)))
+    }
+
+    private func syncUpcomingRaceWidget() {
+        guard let m = meeting else { return }
+        let now = Date()
+        let futureSessions = nextMeetingSessions
+            .compactMap { s -> (Date, String)? in
+                guard let start = parseSessionDate(s.dateStart), start > now else { return nil }
+                return (start, sessionShortName(s.sessionName))
+            }
+            .sorted { $0.0 < $1.0 }
+
+        let targetDate = futureSessions.first?.0 ?? m.parsedDateStart ?? Date()
+        let eventName = futureSessions.first?.1 ?? "Race"
+        let circuitKey = m.circuitShortName.isEmpty ? m.location : m.circuitShortName
+        PodiumWidgetDataSync.pushUpcomingRace(
+            city: m.location,
+            country: m.countryName,
+            eventDate: targetDate,
+            eventName: eventName,
+            circuitNameOrLocation: circuitKey
+        )
+    }
+
+    private func sessionShortName(_ name: String) -> String {
+        let lower = name.lowercased()
+        if lower.contains("practice") || lower.contains("fp") {
+            if lower.contains("1") { return "FP1" }
+            if lower.contains("2") { return "FP2" }
+            if lower.contains("3") { return "FP3" }
+            return "FP"
+        }
+        if lower.contains("qualifying") || lower.contains("quali") { return "Quali" }
+        if lower.contains("race") { return "Race" }
+        if lower.contains("sprint") { return "Sprint" }
+        return name
     }
 }
