@@ -10,8 +10,8 @@ import SwiftUI
 import UIKit
 import WidgetKit
 
-/// В entry для превью; в UI — `widget_max_face_lockscreen` (кроп лица) через `maxVerstappenPortrait()`.
-private let kMaxDriverPhotoAsset = "widget_max_face_lockscreen"
+/// Дефолт ассета для превью/фоллбэка.
+private let kMaxDriverPhotoAsset = "max_verstappen"
 
 struct DriverLeaderEntry: TimelineEntry {
     let date: Date
@@ -37,12 +37,17 @@ struct DriverLeaderProvider: TimelineProvider {
     }
 
     private static func makeEntry() -> DriverLeaderEntry {
-        DriverLeaderEntry(
+        let d = UserDefaults(suiteName: WidgetAppGroup.id)
+        let fullName = d?.string(forKey: WidgetKeys.driverFullName) ?? "Max Verstappen"
+        let pointsText = d?.string(forKey: WidgetKeys.driverPoints) ?? "23 pts"
+        let teamName = d?.string(forKey: WidgetKeys.driverTeam) ?? "Red Bull"
+        let photoAssetName = d?.string(forKey: WidgetKeys.driverPhotoAsset) ?? kMaxDriverPhotoAsset
+        return DriverLeaderEntry(
             date: Date(),
-            fullName: "Max Verstappen",
-            pointsText: "23 pts",
-            teamName: "Red Bull",
-            photoAssetName: kMaxDriverPhotoAsset
+            fullName: fullName,
+            pointsText: pointsText,
+            teamName: teamName,
+            photoAssetName: photoAssetName
         )
     }
 }
@@ -123,7 +128,7 @@ struct DriverLeaderWidgetEntryView: View {
         GeometryReader { geo in
             let h = max(geo.size.height, 1)
             let w = columnWidth
-            WidgetBundledImage.maxVerstappenPortraitTopAlignedFill(width: w, height: h)
+            WidgetBundledImage.portraitTopAlignedFill(assetName: entry.photoAssetName, width: w, height: h)
                 .interpolation(.high)
                 .antialiased(true)
                 .frame(width: w, height: h, alignment: .top)
@@ -160,8 +165,8 @@ struct DriverLeaderWidget: Widget {
         StaticConfiguration(kind: "com.EMYM.Podium.driverLeader.faceCropV4TallPortrait", provider: DriverLeaderProvider()) { entry in
             DriverLeaderWidgetRoot(entry: entry)
         }
-        .configurationDisplayName("Podium — Макс")
-        .description("Портрет Max Verstappen (не болид). Статичные имя и очки.")
+        .configurationDisplayName("Podium — Driver Leader")
+        .description("Лидер чемпионата: фото, имя и очки из OpenF1.")
         .supportedFamilies([.accessoryRectangular, .accessoryInline, .systemMedium])
         .contentMarginsDisabled()
     }

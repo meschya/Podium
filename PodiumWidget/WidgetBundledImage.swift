@@ -67,6 +67,23 @@ enum WidgetBundledImage {
         return Image(uiImage: cropped.withRenderingMode(.alwaysOriginal))
     }
 
+    /// Generic top-aligned aspect-fill portrait from widget/app bundle asset name.
+    static func portraitTopAlignedFill(assetName: String, width: CGFloat, height: CGFloat) -> Image {
+        var source: UIImage?
+        for bundle in [Bundle(for: PodiumWidgetBundleToken.self), Bundle.main] {
+            if let ui = UIImage(named: assetName, in: bundle, compatibleWith: nil) {
+                source = ui
+                break
+            }
+        }
+        guard let raw = source else { return Image(uiImage: transparent1px()) }
+        let img = normalizedUp(raw)
+        let w = max(width, 1)
+        let h = max(height, 1)
+        let cropped = Self.aspectFillTopCenterAligned(img, targetSize: CGSize(width: w, height: h))
+        return Image(uiImage: cropped.withRenderingMode(.alwaysOriginal))
+    }
+
     /// Рисуем «как в Preview»: ориентация `.up`, без сюрпризов с `imageOrientation` при кропе.
     private static func normalizedUp(_ image: UIImage) -> UIImage {
         guard image.imageOrientation != .up else { return image }

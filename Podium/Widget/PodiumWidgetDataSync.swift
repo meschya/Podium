@@ -61,6 +61,15 @@ enum PodiumWidgetDataSync {
         WidgetCenter.shared.reloadTimelines(ofKind: "com.EMYM.Podium.driverLeader.faceCropV4TallPortrait")
     }
 
+    static func pushDriverLeader(fullName: String, points: Int, teamName: String, photoAssetName: String) {
+        guard let defaults = UserDefaults(suiteName: suite) else { return }
+        defaults.set(fullName, forKey: "widget.driver.fullName")
+        defaults.set("\(points) pts", forKey: "widget.driver.points")
+        defaults.set(teamName, forKey: "widget.driver.team")
+        defaults.set(photoAssetName, forKey: "widget.driver.photoAsset")
+        WidgetCenter.shared.reloadTimelines(ofKind: "com.EMYM.Podium.driverLeader.faceCropV4TallPortrait")
+    }
+
     static func pushUpcomingRace(city: String, country: String, eventDate: Date, eventName: String, circuitNameOrLocation: String?) {
         guard let defaults = UserDefaults(suiteName: suite) else { return }
         let f = DateFormatter()

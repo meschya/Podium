@@ -338,6 +338,18 @@ final class SeasonDataLoader: ObservableObject {
                             .prefix(5)
                             .map { row in (position: row.positionCurrent, name: names[row.driverNumber] ?? "\(row.driverNumber)", points: row.pointsCurrent) }
                         await MainActor.run { self.championshipTop = top }
+                        if let leaderStanding = standings.min(by: { $0.positionCurrent < $1.positionCurrent }),
+                           let leaderDriver = drivers.first(where: { $0.driverNumber == leaderStanding.driverNumber }) {
+                            let leaderName = leaderDriver.fullName
+                            let leaderTeam = leaderDriver.teamName ?? ""
+                            let photoAsset = String.AppImage.driverPhotoAsset(forFullName: leaderName)
+                            PodiumWidgetDataSync.pushDriverLeader(
+                                fullName: leaderName,
+                                points: leaderStanding.pointsCurrent,
+                                teamName: leaderTeam,
+                                photoAssetName: photoAsset
+                            )
+                        }
                         let teams = try? await client.championshipTeams(sessionKey: race.sessionKey)
                         let teamsAll = (teams ?? [])
                             .sorted { $0.positionCurrent < $1.positionCurrent }
