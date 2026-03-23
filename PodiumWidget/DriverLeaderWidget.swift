@@ -65,7 +65,7 @@ struct DriverLeaderWidgetEntryView: View {
     }
 
     private var lockScreenAccessory: some View {
-        HStack(alignment: .center, spacing: 6) {
+        HStack(alignment: .top, spacing: 6) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.fullName)
                     .font(.system(size: 10, weight: .bold, design: .rounded))
@@ -82,20 +82,17 @@ struct DriverLeaderWidgetEntryView: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
             }
-            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+            .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
-            WidgetBundledImage.maxVerstappenPortrait()
-                .resizable()
-                .renderingMode(.original)
-                .scaledToFill()
-                .frame(width: 52, height: 40)
-                .clipped()
+            // Вся высота слота. Важно: не overlay+scaledToFit — Image центрируется по вертикали и голова уезжает за верх клипа.
+            // fill + alignment .topLeading якорит верх/левый угол кадра (голова в PNG обычно сверху).
+            driverPhotoFillTop(columnWidth: 52)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     private var homeMedium: some View {
-        HStack(alignment: .center, spacing: 12) {
+        HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(entry.fullName)
                     .font(.system(size: 18, weight: .bold, design: .rounded))
@@ -105,17 +102,12 @@ struct DriverLeaderWidgetEntryView: View {
                     .font(.system(size: 14, weight: .medium, design: .rounded))
                     .foregroundStyle(.secondary)
             }
-            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+            .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
-            WidgetBundledImage.maxVerstappenPortrait()
-                .resizable()
-                .renderingMode(.original)
-                .scaledToFill()
-                .frame(width: 118, height: 130)
-                .clipped()
+            driverPhotoFillTop(columnWidth: 118)
         }
         .padding(12)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     private var inline: some View {
@@ -124,6 +116,21 @@ struct DriverLeaderWidgetEntryView: View {
             .minimumScaleFactor(0.65)
             .lineLimit(1)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Готовый bitmap из UIKit — без `.resizable()`, иначе SwiftUI снова может «центрировать» содержимое в рамке.
+    private func driverPhotoFillTop(columnWidth: CGFloat) -> some View {
+        GeometryReader { geo in
+            let h = max(geo.size.height, 1)
+            let w = columnWidth
+            WidgetBundledImage.maxVerstappenPortraitTopAlignedFill(width: w, height: h)
+                .interpolation(.high)
+                .antialiased(true)
+                .frame(width: w, height: h, alignment: .top)
+                .clipped()
+        }
+        .frame(width: columnWidth)
+        .frame(maxHeight: .infinity, alignment: .top)
     }
 }
 
@@ -150,7 +157,7 @@ private struct DriverLeaderWidgetRoot: View {
 
 struct DriverLeaderWidget: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: "com.EMYM.Podium.driverLeader.faceCrop", provider: DriverLeaderProvider()) { entry in
+        StaticConfiguration(kind: "com.EMYM.Podium.driverLeader.faceCropV4TallPortrait", provider: DriverLeaderProvider()) { entry in
             DriverLeaderWidgetRoot(entry: entry)
         }
         .configurationDisplayName("Podium — Макс")

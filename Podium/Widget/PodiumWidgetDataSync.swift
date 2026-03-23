@@ -51,7 +51,7 @@ enum PodiumWidgetDataSync {
         }
         WidgetCenter.shared.reloadTimelines(ofKind: "com.EMYM.Podium.championship")
         // Тот же билд — обновить снапшот виджета гонщика (портрет), иначе iOS может долго держать старый кэш.
-        WidgetCenter.shared.reloadTimelines(ofKind: "com.EMYM.Podium.driverLeader.faceCrop")
+        WidgetCenter.shared.reloadTimelines(ofKind: "com.EMYM.Podium.driverLeader.faceCropV4TallPortrait")
     }
 
     private static func hexString(from color: Color) -> String {
