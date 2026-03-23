@@ -34,7 +34,9 @@ struct HomeView: View {
                                     topBar(safeAreaTop: safeTop)
                                 grandPrixInfoBar
                                     HStack(alignment: .center, spacing: 16) {
-                                        if showHeroCircuitMap { heroLeftContentView }
+                                        // Текст героя всегда — раньше он был скрыт вместе с картой до showHeroCircuitMap,
+                                        // из‑за этого казалось, что «данных нет».
+                                        heroLeftContentView
                                         Spacer(minLength: 12)
                                         if showHeroCircuitMap { heroCircuitMapView }
                             }
@@ -459,7 +461,7 @@ struct HomeView: View {
 
     private func teamCard(position: Int, name: String, points: Int) -> some View {
         let logoName = teamLogoImageName(name)
-        let bolidName = teamBolidImageName(name)
+        let bolidName = TeamBolidAssetName.resolve(name)
         let tint = teamColor(for: name)
         return VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top) {
@@ -502,18 +504,16 @@ struct HomeView: View {
                     .foregroundStyle(tint)
                     .frame(maxWidth: .infinity)
                     .opacity(0.3)
-                if let bolidName = bolidName {
-                    HStack(alignment: .bottom, spacing: 0) {
-                        Image(bolidName)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxWidth: 200)
-                            .scaleEffect(1.0, anchor: .bottom)
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.leading, 12)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                HStack(alignment: .bottom, spacing: 0) {
+                    Image(bolidName)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: 200)
+                        .scaleEffect(1.0, anchor: .bottom)
+                    Spacer(minLength: 0)
                 }
+                .padding(.leading, 12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
             }
         )
         .clipShape(RoundedRectangle(cornerRadius: Self.teamCardCornerRadius))
@@ -535,23 +535,6 @@ struct HomeView: View {
         if lower.contains("audi") { return Color.AppColors.audi }
         if lower.contains("cadillac") { return Color.AppColors.cadillac }
         return cardBackground
-    }
-
-    private func teamBolidImageName(_ teamName: String) -> String? {
-        let lower = teamName.lowercased()
-        if lower.contains("red bull") && !lower.contains("racing bulls") { return String.AppImage.rebullracing_bolid }
-        if lower.contains("racing bulls") || lower.contains("rb ") || lower == "rb" { return String.AppImage.racingbulls_bolid }
-        if lower.contains("ferrari") { return String.AppImage.ferrari_bolid }
-        if lower.contains("mclaren") { return String.AppImage.mclaren_bolid }
-        if lower.contains("mercedes") { return String.AppImage.mercedes_bolid }
-        if lower.contains("aston martin") { return String.AppImage.astonmartin_bolid }
-        if lower.contains("alpine") { return String.AppImage.alpine_bolid }
-        if lower.contains("williams") { return String.AppImage.williams_bolid }
-        if lower.contains("haas") { return String.AppImage.haas_bolid }
-        if lower.contains("sauber") || lower.contains("kick") { return String.AppImage.haas_bolid }
-        if lower.contains("audi") { return String.AppImage.audi_bolid }
-        if lower.contains("cadillac") { return String.AppImage.cadillac_bolid }
-        return nil
     }
 
     private func cleanTeamName(_ raw: String) -> String {

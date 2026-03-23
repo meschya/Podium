@@ -341,7 +341,10 @@ final class SeasonDataLoader: ObservableObject {
                         let teamsAll = (teams ?? [])
                             .sorted { $0.positionCurrent < $1.positionCurrent }
                             .map { (position: $0.positionCurrent, name: $0.teamName, points: $0.pointsCurrent) }
-                        await MainActor.run { self.championshipTeamsTop = teamsAll }
+                        await MainActor.run {
+                            self.championshipTeamsTop = teamsAll
+                            self.syncConstructorWidgetFromStandings()
+                        }
                         teamsLoadedFromChampionship = !teamsAll.isEmpty
                     }
                 }
@@ -366,10 +369,18 @@ final class SeasonDataLoader: ObservableObject {
                         }
                     }
                     if !teamsList.isEmpty {
-                        await MainActor.run { self.championshipTeamsTop = teamsList }
+                        await MainActor.run {
+                            self.championshipTeamsTop = teamsList
+                            self.syncConstructorWidgetFromStandings()
+                        }
                     } else {
                         let fallback = Self.fallbackSeasonTeams(year: year)
-                        if !fallback.isEmpty { await MainActor.run { self.championshipTeamsTop = fallback } }
+                        if !fallback.isEmpty {
+                            await MainActor.run {
+                                self.championshipTeamsTop = fallback
+                                self.syncConstructorWidgetFromStandings()
+                            }
+                        }
                     }
                 }
                 if let nextMeeting = first {
@@ -536,6 +547,21 @@ final class SeasonDataLoader: ObservableObject {
         if lower.contains("audi") { return UIColor(red: 117/255, green: 21/255, blue: 0/255, alpha: 1) }
         if lower.contains("cadillac") { return UIColor(red: 88/255, green: 88/255, blue: 91/255, alpha: 1) }
         return .gray
+    }
+
+    private func syncConstructorWidgetFromStandings() {
+        guard let leader = championshipTeamsTop.min(by: { $0.position < $1.position }) else { return }
+        PodiumWidgetDataSync.pushConstructorLeader(
+            position: leader.position,
+            teamName: leader.name,
+            points: leader.points,
+            accentColor: WidgetTeamAccent.color(for: leader.name)
+        )
+    }
+
+    /// Обновить виджет конструкторов из уже загруженного топа (после открытия приложения).
+    func refreshConstructorWidgetFromStandings() {
+        syncConstructorWidgetFromStandings()
     }
 
     func registerLiveDotsView(_ view: some LiveDotsViewUpdating, circuitInfo: CircuitInfo?, size: CGSize) {

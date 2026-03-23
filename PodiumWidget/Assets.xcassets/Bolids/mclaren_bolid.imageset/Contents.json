@@ -1,0 +1,12 @@
+{
+  "images" : [
+    {
+      "filename" : "mclaren_bolid.png",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

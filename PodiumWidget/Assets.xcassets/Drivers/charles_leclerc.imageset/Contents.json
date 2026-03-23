@@ -1,0 +1,12 @@
+{
+  "images" : [
+    {
+      "filename" : "charles_leclerc.png",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

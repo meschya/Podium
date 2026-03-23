@@ -210,6 +210,20 @@ extension String {
             return map[id]
         }
 
+        /// Ключ вида `max_verstappen` из полного имени (как в Races / подиум).
+        static func driverIdFromFullName(_ name: String) -> String {
+            name.lowercased()
+                .replacingOccurrences(of: " ", with: "_")
+                .replacingOccurrences(of: "é", with: "e")
+                .replacingOccurrences(of: "ö", with: "o")
+        }
+
+        /// Имя imageset в `Assets.xcassets/Drivers` для виджета и карточек.
+        static func driverPhotoAsset(forFullName name: String) -> String {
+            let id = driverIdFromFullName(name)
+            return driverPhoto(driverId: id) ?? "max_verstappen"
+        }
+
         // Номера гонщиков (стилизованные изображения из Numbers)
         private static let driverNumberAssetNames: Set<Int> = [1, 3, 5, 6, 10, 11, 12, 14, 16, 18, 23, 27, 30, 31, 41, 43, 44, 55, 63, 77, 81, 87]
         /// Имя ассета для номера гонщика (driver_number). Возвращает nil, если изображения для этого номера нет.

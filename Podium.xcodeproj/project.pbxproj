@@ -9,10 +9,36 @@
 /* Begin PBXBuildFile section */
 		968285DA2F5A73FC00242116 /* CocoaMQTT in Frameworks */ = {isa = PBXBuildFile; productRef = 963032512F53CE9000C74F02 /* CocoaMQTT */; };
 		968285DB2F5A73FC00242116 /* CocoaMQTTWebSocket in Frameworks */ = {isa = PBXBuildFile; productRef = 963032522F53CE9000C74F03 /* CocoaMQTTWebSocket */; };
+		F0E0D0C02F55000800C74EF0 /* PodiumWidget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = F0E0D0C02F55000000C74EF0 /* PodiumWidget.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		F0E0D0C02F55000700C74EF0 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 9630321F2F53CE9000C74EF9 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F0E0D0C02F55000200C74EF0;
+			remoteInfo = PodiumWidget;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		F0E0D0C02F55000900C74EF0 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				F0E0D0C02F55000800C74EF0 /* PodiumWidget.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		963032272F53CE9000C74EF9 /* Podium.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Podium.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F0E0D0C02F55000000C74EF0 /* PodiumWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = PodiumWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -23,6 +49,13 @@
 			);
 			target = 963032262F53CE9000C74EF9 /* Podium */;
 		};
+		F0E0D0C02F55000F00C74EF0 /* Exceptions for "PodiumWidget" folder in "PodiumWidget" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = F0E0D0C02F55000200C74EF0 /* PodiumWidget */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -32,6 +65,14 @@
 				963032602F53D59800C74EF9 /* Exceptions for "Podium" folder in "Podium" target */,
 			);
 			path = Podium;
+			sourceTree = "<group>";
+		};
+		F0E0D0C02F55000B00C74EF0 /* PodiumWidget */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				F0E0D0C02F55000F00C74EF0 /* Exceptions for "PodiumWidget" folder in "PodiumWidget" target */,
+			);
+			path = PodiumWidget;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -46,6 +87,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F0E0D0C02F55000D00C74EF0 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -53,6 +101,7 @@
 			isa = PBXGroup;
 			children = (
 				963032292F53CE9000C74EF9 /* Podium */,
+				F0E0D0C02F55000B00C74EF0 /* PodiumWidget */,
 				963032282F53CE9000C74EF9 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -61,6 +110,7 @@
 			isa = PBXGroup;
 			children = (
 				963032272F53CE9000C74EF9 /* Podium.app */,
+				F0E0D0C02F55000000C74EF0 /* PodiumWidget.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -75,10 +125,12 @@
 				963032232F53CE9000C74EF9 /* Sources */,
 				963032242F53CE9000C74EF9 /* Frameworks */,
 				963032252F53CE9000C74EF9 /* Resources */,
+				F0E0D0C02F55000900C74EF0 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				F0E0D0C02F55000A00C74EF0 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				963032292F53CE9000C74EF9 /* Podium */,
@@ -92,6 +144,28 @@
 			productReference = 963032272F53CE9000C74EF9 /* Podium.app */;
 			productType = "com.apple.product-type.application";
 		};
+		F0E0D0C02F55000200C74EF0 /* PodiumWidget */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F0E0D0C02F55000300C74EF0 /* Build configuration list for PBXNativeTarget "PodiumWidget" */;
+			buildPhases = (
+				F0E0D0C02F55000C00C74EF0 /* Sources */,
+				F0E0D0C02F55000D00C74EF0 /* Frameworks */,
+				F0E0D0C02F55000E00C74EF0 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				F0E0D0C02F55000B00C74EF0 /* PodiumWidget */,
+			);
+			name = PodiumWidget;
+			packageProductDependencies = (
+			);
+			productName = PodiumWidget;
+			productReference = F0E0D0C02F55000000C74EF0 /* PodiumWidget.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -103,6 +177,9 @@
 				LastUpgradeCheck = 2620;
 				TargetAttributes = {
 					963032262F53CE9000C74EF9 = {
+						CreatedOnToolsVersion = 26.2;
+					};
+					F0E0D0C02F55000200C74EF0 = {
 						CreatedOnToolsVersion = 26.2;
 					};
 				};
@@ -125,12 +202,20 @@
 			projectRoot = "";
 			targets = (
 				963032262F53CE9000C74EF9 /* Podium */,
+				F0E0D0C02F55000200C74EF0 /* PodiumWidget */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		963032252F53CE9000C74EF9 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F0E0D0C02F55000E00C74EF0 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -147,7 +232,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F0E0D0C02F55000C00C74EF0 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		F0E0D0C02F55000A00C74EF0 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = F0E0D0C02F55000200C74EF0 /* PodiumWidget */;
+			targetProxy = F0E0D0C02F55000700C74EF0 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		963032302F53CE9300C74EF9 /* Debug */ = {
@@ -276,6 +376,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Podium/Podium.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 24Q5SL67M8;
@@ -309,6 +410,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Podium/Podium.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 24Q5SL67M8;
@@ -337,6 +439,66 @@
 			};
 			name = Release;
 		};
+		F0E0D0C02F55000400C74EF0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = "";
+				CODE_SIGN_ENTITLEMENTS = PodiumWidget/PodiumWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 24Q5SL67M8;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = PodiumWidget/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.EMYM.Podium.PodiumWidget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		F0E0D0C02F55000500C74EF0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = "";
+				CODE_SIGN_ENTITLEMENTS = PodiumWidget/PodiumWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 24Q5SL67M8;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = PodiumWidget/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.EMYM.Podium.PodiumWidget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -354,6 +516,15 @@
 			buildConfigurations = (
 				963032332F53CE9300C74EF9 /* Debug */,
 				963032342F53CE9300C74EF9 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F0E0D0C02F55000300C74EF0 /* Build configuration list for PBXNativeTarget "PodiumWidget" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F0E0D0C02F55000400C74EF0 /* Debug */,
+				F0E0D0C02F55000500C74EF0 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
