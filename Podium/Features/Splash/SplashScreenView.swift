@@ -9,7 +9,6 @@ struct SplashScreenView: View {
 
     @State private var startTime: Date?
     @State private var hasCalledFinish = false
-    @State private var hasStartedLoad = false
     /// 0...1: анимация появления свайпа после лоадера (снизу вверх).
     @State private var swipeAppear: CGFloat = 0
 
@@ -96,9 +95,6 @@ struct SplashScreenView: View {
             .onAppear {
                 if startTime == nil { startTime = Date() }
                 if loader.isLoaded { swipeAppear = 1 }
-                guard !hasStartedLoad else { return }
-                hasStartedLoad = true
-                Task { await loader.load() }
             }
             .onChange(of: loader.isLoaded) { _, isLoaded in
                 if isLoaded {

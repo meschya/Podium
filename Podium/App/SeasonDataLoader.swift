@@ -4,6 +4,12 @@ import Combine
 import CoreGraphics
 import UIKit
 
+private enum SeasonLoaderLog {
+    nonisolated static func line(_ message: String) {
+        Swift.print("[SeasonLoader] \(message)")
+    }
+}
+
 /// Обновление точек на карте без SwiftUI — позиции и цвета команд.
 protocol LiveDotsViewUpdating: AnyObject {
     func setPositions(_ positions: [CGPoint], colors: [UIColor])
@@ -37,7 +43,11 @@ final class SeasonDataLoader: ObservableObject {
     @Published var circuitInfo: CircuitInfo?
     @Published var circuitInfoByMeetingKey: [Int: CircuitInfo] = [:]
     @Published var seasonMeetings: [OpenF1Meeting] = []
-    @Published var championshipTop: [(position: Int, name: String, points: Int)] = []
+    @Published var championshipTop: [(position: Int, name: String, points: Double)] = []
+    /// Полный список пилотов в кубке (после последней завершённой гонки сезона).
+    @Published var championshipDriverStandings: [(position: Int, driverNumber: Int, fullName: String, teamName: String, points: Double, countryCode: String)] = []
+    /// Wins / podiums / poles из OpenF1 `championship_drivers`.
+    @Published var championshipDriverTrophyStats: [Int: (wins: Int, podiums: Int, poles: Int)] = [:]
     @Published var championshipTeamsTop: [(position: Int, name: String, points: Int)] = []
     @Published var nextMeetingSessions: [OpenF1Session] = []
     /// Состояние лайв-карты (обновляется часто; подписывается только карта).
@@ -51,9 +61,8 @@ final class SeasonDataLoader: ObservableObject {
     /// Имя и команда гонщика по номеру (для топ‑3 в Hero).
     private var liveDriverNames: [Int: String] = [:]
     private var liveDriverTeamNames: [Int: String] = [:]
-    /// Стрим включён, когда герой на главном экране или открыт таб Live.
+    /// Стрим включён, когда герой на главном экране виден.
     @Published var isHeroSectionVisible = true
-    @Published var isLiveViewVisible = false
     /// Буфер MQTT в акторе — не грузим main thread каждым сообщением.
     private let liveLocationBuffer = LiveLocationBuffer()
     private var lastLiveStreamSessionKey: Int?
@@ -65,6 +74,8 @@ final class SeasonDataLoader: ObservableObject {
     @Published var fiaNews: [FIANewsItem] = []
     @Published var isLoaded = false
     @Published var isLoading = false
+    /// В текущем году уже есть завершённый этап — тогда ждём непустую таблицу пилотов; иначе пустые пилоты не считаем «дырой» bootstrap.
+    @Published private(set) var bootstrapHadCompletedRace = false
     /// Кэш результатов по meetingKey (для повторного показа без загрузки).
     @Published var resultsByMeetingKey: [Int: [RaceResultRow]] = [:]
     /// Результаты, которые сейчас показываются в UI (только для последнего запрошенного meeting).
@@ -85,21 +96,64 @@ final class SeasonDataLoader: ObservableObject {
     /// Календарь сезона из f1api.dev (для таба Seasons — карточки и round совпадают с API).
     @Published var f1apiRacesForSelectedYear: [F1APIRaceInfo] = []
 
+    /// Wins / podiums / poles по сезону из OpenF1 (один проход по этапам — без f1api, без N×пилоты).
+    @Published var cupTrophyByDriver: [Int: (wins: Int, podiums: Int, poles: Int)] = [:]
+    @Published var cupTrophyYear: Int?
+    private var cupTrophyComputeTask: Task<Void, Never>?
+
+    /// Таблица на вкладке «Кубок» по выбранному сезону (подгружается здесь, не только из bootstrap главной).
+    @Published var driversCupTabStandings: [(position: Int, driverNumber: Int, fullName: String, teamName: String, points: Double, countryCode: String)] = []
+    @Published var driversCupTabStandingsYear: Int?
+    @Published var isLoadingDriversCupStandings = false
+
     /// Years available in picker: от текущего года до 2014 (текущий выбран по умолчанию).
     static var availableSeasonYears: [Int] {
         let current = Calendar.current.component(.year, from: Date())
         return Array((2014...current).reversed())
     }
 
+    /// Минимум данных для главной: календарь и конструкторы; пилоты обязательны только если в сезоне уже был завершённый ГП.
+    var isBootstrapDataComplete: Bool {
+        guard !seasonMeetings.isEmpty, !championshipTeamsTop.isEmpty else { return false }
+        if bootstrapHadCompletedRace {
+            return !championshipDriverStandings.isEmpty
+        }
+        return true
+    }
+
+    /// Cold start: если после первого `load()` bootstrap неполный — повтор с `forceRefresh`.
+    func finalizeBootstrapIfIncomplete() async {
+        if isBootstrapDataComplete {
+            SeasonLoaderLog.line("finalizeBootstrapIfIncomplete: skip (bootstrap already complete)")
+            return
+        }
+        SeasonLoaderLog.line("finalizeBootstrapIfIncomplete: calling load(forceRefresh: true) — incomplete bootstrap")
+        await load(forceRefresh: true)
+    }
+
+    /// Возврат из фона: обновляем данные (после cold start `load()` сам дождётся текущего in-flight).
+    func resumeBootstrapIfNeeded() async {
+        guard isLoaded else {
+            SeasonLoaderLog.line("resumeBootstrapIfNeeded: skip (!isLoaded)")
+            return
+        }
+        SeasonLoaderLog.line("resumeBootstrapIfNeeded: load(forceRefresh: true)")
+        await load(forceRefresh: true)
+    }
+
     /// Загрузка календаря сезона из f1api + Open F1 (трассы для карт на карточках).
     func loadSeasonFromF1API(_ year: Int) async {
+        SeasonLoaderLog.line("loadSeasonFromF1API(year: \(year)) start")
         await MainActor.run { isLoadingYear = true }
         defer { Task { @MainActor in self.isLoadingYear = false } }
         do {
             let races = try await F1APIClient.shared.seasonCalendar(year: year)
+            SeasonLoaderLog.line("loadSeasonFromF1API: F1APIClient.seasonCalendar → \(races.count) races")
             await MainActor.run {
                 selectedSeasonYear = year
                 f1apiRacesForSelectedYear = races
+                cupTrophyByDriver = [:]
+                cupTrophyYear = nil
             }
             let client = OpenF1Client.shared
             let meetings = (try? await client.meetings(year: year)) ?? []
@@ -120,21 +174,28 @@ final class SeasonDataLoader: ObservableObject {
                 }
             }
             await MainActor.run { circuitInfoForSelectedYear = loaded }
+            scheduleCupTrophiesForYear(year)
+            SeasonLoaderLog.line("loadSeasonFromF1API(year: \(year)) done")
         } catch {
+            SeasonLoaderLog.line("loadSeasonFromF1API(year: \(year)) error: \(error.localizedDescription)")
             await MainActor.run { f1apiRacesForSelectedYear = [] }
         }
     }
 
     func loadMeetingsForYear(_ year: Int) async {
+        SeasonLoaderLog.line("loadMeetingsForYear(\(year)) start")
         await MainActor.run { isLoadingYear = true }
         defer { Task { @MainActor in self.isLoadingYear = false } }
         let client = OpenF1Client.shared
         do {
             let meetings = try await client.meetings(year: year)
+            SeasonLoaderLog.line("loadMeetingsForYear: OpenF1 meetings → \(meetings.count) raw")
             let raceMeetings = meetings.filter { !$0.meetingName.lowercased().contains("test") }
             await MainActor.run {
                 selectedSeasonYear = year
                 meetingsForSelectedYear = raceMeetings
+                cupTrophyByDriver = [:]
+                cupTrophyYear = nil
             }
             var loaded: [Int: CircuitInfo] = [:]
             await withTaskGroup(of: (Int, CircuitInfo?).self) { group in
@@ -151,12 +212,209 @@ final class SeasonDataLoader: ObservableObject {
                 }
             }
             await MainActor.run { circuitInfoForSelectedYear = loaded }
+            scheduleCupTrophiesForYear(year)
+            SeasonLoaderLog.line("loadMeetingsForYear(\(year)) done")
         } catch {
+            SeasonLoaderLog.line("loadMeetingsForYear(\(year)) error: \(error.localizedDescription)")
             await MainActor.run {
                 meetingsForSelectedYear = []
                 circuitInfoForSelectedYear = [:]
             }
         }
+    }
+
+    /// Один расчёт трофеев на сезон: на этап 1× `position` по гонке + 1× по квалификации, дальше раздаём всем номерам (без `raceResults` и без повторов на каждого пилота).
+    func scheduleCupTrophiesForYear(_ year: Int) {
+        cupTrophyComputeTask?.cancel()
+        cupTrophyComputeTask = Task(priority: .utility) { [weak self] in
+            await self?.computeCupTrophiesFromOpenF1(year: year)
+        }
+    }
+
+    /// Результат загрузки кубка: не затираем таблицу, если для текущего года уже пришли данные с главной (`load()`), иначе гонка даёт «то есть, то нет».
+    private func applyDriversCupTabStandingsFromFetch(
+        year: Int,
+        rows: [(position: Int, driverNumber: Int, fullName: String, teamName: String, points: Double, countryCode: String)]
+    ) {
+        let calendarYear = Calendar.current.component(.year, from: Date())
+        if !rows.isEmpty {
+            driversCupTabStandings = rows
+            driversCupTabStandingsYear = year
+            return
+        }
+        if year == calendarYear, !championshipDriverStandings.isEmpty {
+            driversCupTabStandings = championshipDriverStandings
+            driversCupTabStandingsYear = year
+        } else {
+            driversCupTabStandings = []
+            driversCupTabStandingsYear = year
+        }
+    }
+
+    /// Загрузка чемпионата для вкладки «Кубок» по году из селектора (последняя завершённая гонка сезона в OpenF1).
+    func loadDriversCupTabStandings(year: Int) async {
+        let calendarYear = Calendar.current.component(.year, from: Date())
+        SeasonLoaderLog.line("loadDriversCupTabStandings(year: \(year)) enter")
+        // Не стартовать отдельную сеть, пока идёт общий bootstrap — иначе долгий ProgressView и дубли запросов.
+        if year == calendarYear {
+            let deadline = Date().addingTimeInterval(120)
+            while isLoading && Date() < deadline {
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            if isLoading {
+                SeasonLoaderLog.line("loadDriversCupTabStandings: waited 120s, isLoading still true — continuing")
+            }
+        }
+        if year == calendarYear, !championshipDriverStandings.isEmpty {
+            driversCupTabStandings = championshipDriverStandings
+            driversCupTabStandingsYear = year
+            SeasonLoaderLog.line("loadDriversCupTabStandings: copy from championshipDriverStandings (\(championshipDriverStandings.count) rows)")
+            return
+        }
+        if driversCupTabStandingsYear == year, !driversCupTabStandings.isEmpty {
+            SeasonLoaderLog.line("loadDriversCupTabStandings: cache hit year=\(year), rows=\(driversCupTabStandings.count)")
+            return
+        }
+        isLoadingDriversCupStandings = true
+        defer { isLoadingDriversCupStandings = false }
+
+        let client = OpenF1Client.shared
+        let now = Date()
+        do {
+            SeasonLoaderLog.line("loadDriversCupTabStandings: OpenF1 meetings(year: \(year))")
+            let meetings = try await client.meetings(year: year)
+            let raceMeetings = meetings.filter { !$0.meetingName.lowercased().contains("test") }
+            let sortedByDate = raceMeetings.sorted { ($0.parsedDateStart ?? .distantPast) < ($1.parsedDateStart ?? .distantPast) }
+            let lastCompleted = sortedByDate.last { m in (m.parsedDateEnd ?? .distantFuture) < now }
+            guard let last = lastCompleted else {
+                if Task.isCancelled { return }
+                SeasonLoaderLog.line("loadDriversCupTabStandings: no lastCompleted race for year \(year)")
+                applyDriversCupTabStandingsFromFetch(year: year, rows: [])
+                return
+            }
+            SeasonLoaderLog.line("loadDriversCupTabStandings: sessions(meetingKey: \(last.meetingKey)) last completed")
+            let sessions = try await client.sessions(meetingKey: last.meetingKey)
+            guard let race = OpenF1Session.grandPrixRaceSession(in: sessions) else {
+                if Task.isCancelled { return }
+                SeasonLoaderLog.line("loadDriversCupTabStandings: no GP race session for meeting \(last.meetingKey)")
+                applyDriversCupTabStandingsFromFetch(year: year, rows: [])
+                return
+            }
+            SeasonLoaderLog.line("loadDriversCupTabStandings: championshipDrivers + drivers sessionKey=\(race.sessionKey)")
+            async let standingsTask = client.championshipDrivers(sessionKey: race.sessionKey)
+            async let driversTask = client.drivers(sessionKey: race.sessionKey)
+            let standings = try await standingsTask
+            let drivers = try await driversTask
+            let names = Dictionary(uniqueKeysWithValues: drivers.map { ($0.driverNumber, $0.fullName) })
+            let sortedStandings = standings.sorted { $0.positionCurrent < $1.positionCurrent }
+            let fullRows: [(position: Int, driverNumber: Int, fullName: String, teamName: String, points: Double, countryCode: String)] = sortedStandings.map { row in
+                let d = drivers.first { $0.driverNumber == row.driverNumber }
+                let full = names[row.driverNumber] ?? "\(row.driverNumber)"
+                let team = d?.teamName ?? ""
+                let cc = DriverNationality.resolveCountryCode(apiCode: d?.countryCode, fullName: full)
+                return (row.positionCurrent, row.driverNumber, full, team, row.pointsCurrent, cc)
+            }
+            if Task.isCancelled { return }
+            applyDriversCupTabStandingsFromFetch(year: year, rows: fullRows)
+            SeasonLoaderLog.line("loadDriversCupTabStandings(year: \(year)) done, rows=\(fullRows.count)")
+        } catch {
+            if Task.isCancelled { return }
+            SeasonLoaderLog.line("loadDriversCupTabStandings(year: \(year)) error: \(error.localizedDescription)")
+            applyDriversCupTabStandingsFromFetch(year: year, rows: [])
+        }
+    }
+
+    private func computeCupTrophiesFromOpenF1(year: Int) async {
+        let client = OpenF1Client.shared
+        guard !Task.isCancelled else { return }
+        do {
+            let meetings = try await client.meetings(year: year)
+                .filter { !$0.meetingName.lowercased().contains("test") }
+                .sorted { ($0.parsedDateStart ?? .distantPast) < ($1.parsedDateStart ?? .distantPast) }
+            let allSessions = try await client.sessions(year: year)
+            let byMeeting = Dictionary(grouping: allSessions, by: \.meetingKey)
+            var raceSessionKeyByMeeting: [Int: Int] = [:]
+            var qualSessionKeyByMeeting: [Int: Int] = [:]
+            for (mk, sess) in byMeeting {
+                if let r = OpenF1Session.grandPrixRaceSession(in: sess) {
+                    raceSessionKeyByMeeting[mk] = r.sessionKey
+                }
+                if let q = OpenF1Session.grandPrixQualifyingSession(in: sess) {
+                    qualSessionKeyByMeeting[mk] = q.sessionKey
+                }
+            }
+            let rounds = Array(meetings.prefix(25))
+            var totalWins: [Int: Int] = [:]
+            var totalPodiums: [Int: Int] = [:]
+            var totalPoles: [Int: Int] = [:]
+
+            await withTaskGroup(of: CupRoundTrophyResult.self) { group in
+                for meeting in rounds {
+                    let rk = raceSessionKeyByMeeting[meeting.meetingKey]
+                    let qk = qualSessionKeyByMeeting[meeting.meetingKey]
+                    group.addTask {
+                        await Self.cupTrophiesForOneMeeting(
+                            raceSessionKey: rk,
+                            qualSessionKey: qk,
+                            client: client
+                        )
+                    }
+                }
+                for await delta in group {
+                    Self.mergeTrophyMaps(&totalWins, delta.wins)
+                    Self.mergeTrophyMaps(&totalPodiums, delta.podiums)
+                    Self.mergeTrophyMaps(&totalPoles, delta.poles)
+                }
+            }
+
+            guard !Task.isCancelled else { return }
+            var merged: [Int: (wins: Int, podiums: Int, poles: Int)] = [:]
+            let keys = Set(totalWins.keys).union(totalPodiums.keys).union(totalPoles.keys)
+            for d in keys {
+                merged[d] = (totalWins[d] ?? 0, totalPodiums[d] ?? 0, totalPoles[d] ?? 0)
+            }
+            await MainActor.run {
+                self.cupTrophyByDriver = merged
+                self.cupTrophyYear = year
+            }
+        } catch {
+            if Task.isCancelled { return }
+        }
+    }
+
+    private struct CupRoundTrophyResult: Sendable {
+        var wins: [Int: Int]
+        var podiums: [Int: Int]
+        var poles: [Int: Int]
+        static let empty = CupRoundTrophyResult(wins: [:], podiums: [:], poles: [:])
+    }
+
+    private static func mergeTrophyMaps(_ acc: inout [Int: Int], _ delta: [Int: Int]) {
+        for (k, v) in delta { acc[k, default: 0] += v }
+    }
+
+    private static func cupTrophiesForOneMeeting(
+        raceSessionKey: Int?,
+        qualSessionKey: Int?,
+        client: OpenF1Client
+    ) async -> CupRoundTrophyResult {
+        guard let raceSK = raceSessionKey else { return CupRoundTrophyResult.empty }
+        let order = await client.driverOrderByLatestPositionSnapshot(sessionKey: raceSK)
+        var wins: [Int: Int] = [:]
+        var podiums: [Int: Int] = [:]
+        var poles: [Int: Int] = [:]
+        for (idx, num) in order.enumerated() {
+            let p = idx + 1
+            if p == 1 { wins[num, default: 0] += 1 }
+            if p <= 3 { podiums[num, default: 0] += 1 }
+        }
+        if let qualSK = qualSessionKey {
+            let grid = await client.driverOrderByLatestPositionSnapshot(sessionKey: qualSK)
+            if let first = grid.first {
+                poles[first, default: 0] += 1
+            }
+        }
+        return CupRoundTrophyResult(wins: wins, podiums: podiums, poles: poles)
     }
 
     /// Результаты из f1api по year + round (для карточек из f1api календаря). Ключ для кэша = round.
@@ -255,19 +513,27 @@ final class SeasonDataLoader: ObservableObject {
         displayedResultsMeetingKey = nil
     }
 
-    /// Таймаут загрузки: если за это время не дошли до bootstrap — показываем главный экран.
-    private let loadTimeout: Duration = .seconds(10)
-
     /// Вся сеть и обработка — в фоне (Task.detached), на main только быстрые обновления состояния (по доке Apple).
-    func load() async {
-        guard !isLoaded, !isLoading else { return }
-        await MainActor.run { isLoading = true }
-        defer { Task { @MainActor in self.isLoading = false } }
-
-        Task { @MainActor in
-            try? await Task.sleep(for: loadTimeout)
-            if !self.isLoaded { self.isLoaded = true }
+    /// - `forceRefresh`: при возврате из фона — не выходим раньше времени, если кэш «полный»; иначе старые данные не перезапрашиваются.
+    func load(forceRefresh: Bool = false) async {
+        // Раньше: `guard !isLoading else { return }` — второй вызов (foreground, другой экран)
+        // молча выходил и НЕ ждал первый таск → пустой UI и «ничего не меняется» при повторных заходах.
+        SeasonLoaderLog.line("load(forceRefresh: \(forceRefresh)) enter — isLoaded=\(isLoaded) isLoading=\(isLoading) complete=\(isBootstrapDataComplete)")
+        let waitDeadline = Date().addingTimeInterval(120)
+        while isLoading && Date() < waitDeadline {
+            try? await Task.sleep(for: .milliseconds(50))
         }
+        if !forceRefresh && isLoaded && isBootstrapDataComplete {
+            SeasonLoaderLog.line("load: skip (already loaded + bootstrap complete)")
+            return
+        }
+        guard !isLoading else {
+            SeasonLoaderLog.line("load: skip (isLoading still true after wait)")
+            return
+        }
+
+        isLoading = true
+        SeasonLoaderLog.line("load: start bootstrap task (year=\(Calendar.current.component(.year, from: Date())))")
 
         await Task.detached(priority: .userInitiated) { [weak self] in
             guard let self = self else { return }
@@ -275,9 +541,11 @@ final class SeasonDataLoader: ObservableObject {
             let year = Calendar.current.component(.year, from: Date())
             let now = Date()
             do {
+                SeasonLoaderLog.line("load: OpenF1 meetings(year: \(year))")
                 let meetings = try await client.meetings(year: year)
                 let raceMeetings = meetings.filter { !$0.meetingName.lowercased().contains("test") }
                 let sortedByDate = raceMeetings.sorted { ($0.parsedDateStart ?? .distantPast) < ($1.parsedDateStart ?? .distantPast) }
+                SeasonLoaderLog.line("load: meetings → \(raceMeetings.count) races (sorted \(sortedByDate.count))")
                 await MainActor.run { self.seasonMeetings = sortedByDate }
 
                 let currentOrNext = sortedByDate.first { m in
@@ -287,8 +555,10 @@ final class SeasonDataLoader: ObservableObject {
                 }
                 let first = currentOrNext ?? sortedByDate.first
                 if let first = first {
+                    SeasonLoaderLog.line("load: current/next meeting key=\(first.meetingKey) name=\(first.meetingName)")
                     await MainActor.run { self.meeting = first }
                     // Параллельно: circuitInfo и сессии — MQTT стартует сразу, не ждём circuitInfo.
+                    SeasonLoaderLog.line("load: circuitInfo + sessions(meetingKey: \(first.meetingKey))")
                     let circuitTask = first.circuitInfoUrl.map { url in Task { try? await client.circuitInfo(urlString: url) } }
                     let sessionsTask = Task { try? await client.sessions(meetingKey: first.meetingKey) }
                     let info: CircuitInfo? = if let t = circuitTask { await t.value } else { nil }
@@ -298,13 +568,12 @@ final class SeasonDataLoader: ObservableObject {
                         self.nextMeetingSessions = nextSessions.sorted { ($0.dateStart ?? "") < ($1.dateStart ?? "") }
                         self.syncUpcomingRaceWidget()
                         self.startLiveStreamIfNeeded()
-                        self.isLoaded = true
                     }
-                } else {
-                    await MainActor.run { self.isLoaded = true }
                 }
 
                 var loadedCircuits: [Int: CircuitInfo] = [:]
+                let circuitFetchCount = raceMeetings.filter { $0.circuitInfoUrl != nil }.count
+                SeasonLoaderLog.line("load: parallel circuitInfo for \(circuitFetchCount) meetings")
                 await withTaskGroup(of: (Int, CircuitInfo?).self) { group in
                     for m in raceMeetings {
                         guard m.circuitInfoUrl != nil else { continue }
@@ -321,23 +590,45 @@ final class SeasonDataLoader: ObservableObject {
                     }
                 }
                 await MainActor.run { self.circuitInfoByMeetingKey = loadedCircuits }
+                SeasonLoaderLog.line("load: circuitInfoByMeetingKey keys=\(loadedCircuits.count)")
 
                 var teamsLoadedFromChampionship = false
                 let lastCompleted = sortedByDate.last { m in (m.parsedDateEnd ?? .distantFuture) < now }
+                await MainActor.run { self.bootstrapHadCompletedRace = lastCompleted != nil }
                 if let last = lastCompleted {
+                    SeasonLoaderLog.line("load: championship path — last completed meetingKey=\(last.meetingKey)")
                     let sessions = try await client.sessions(meetingKey: last.meetingKey)
-                    let raceSession = sessions.first { s in
-                        s.sessionName == "Race" || (s.sessionType?.lowercased().contains("race") == true)
-                    }
+                    let raceSession = OpenF1Session.grandPrixRaceSession(in: sessions)
                     if let race = raceSession {
-                        let standings = try await client.championshipDrivers(sessionKey: race.sessionKey)
-                        let drivers = try await client.drivers(sessionKey: race.sessionKey)
+                        SeasonLoaderLog.line("load: championshipDrivers + drivers + teams sessionKey=\(race.sessionKey)")
+                        async let standingsTask = client.championshipDrivers(sessionKey: race.sessionKey)
+                        async let driversTask = client.drivers(sessionKey: race.sessionKey)
+                        let standings = try await standingsTask
+                        let drivers = try await driversTask
                         let names = Dictionary(uniqueKeysWithValues: drivers.map { ($0.driverNumber, $0.fullName) })
-                        let top = standings
-                            .sorted { $0.positionCurrent < $1.positionCurrent }
-                            .prefix(5)
-                            .map { row in (position: row.positionCurrent, name: names[row.driverNumber] ?? "\(row.driverNumber)", points: row.pointsCurrent) }
-                        await MainActor.run { self.championshipTop = top }
+                        let sortedStandings = standings.sorted { $0.positionCurrent < $1.positionCurrent }
+                        var trophyStatsByDriverNumber: [Int: (wins: Int, podiums: Int, poles: Int)] = [:]
+                        for row in sortedStandings {
+                            trophyStatsByDriverNumber[row.driverNumber] = (wins: row.wins, podiums: row.podiums, poles: row.poles)
+                        }
+                        let fullRows = sortedStandings.map { row -> (Int, Int, String, String, Double, String) in
+                            let d = drivers.first { $0.driverNumber == row.driverNumber }
+                            let full = names[row.driverNumber] ?? "\(row.driverNumber)"
+                            let team = d?.teamName ?? ""
+                            let cc = DriverNationality.resolveCountryCode(apiCode: d?.countryCode, fullName: full)
+                            return (row.positionCurrent, row.driverNumber, full, team, row.pointsCurrent, cc)
+                        }
+                        let top = fullRows.prefix(5).map { ($0.0, $0.2, $0.4) }
+                        await MainActor.run {
+                            self.championshipDriverStandings = fullRows
+                            self.championshipDriverTrophyStats = trophyStatsByDriverNumber
+                            self.championshipTop = top
+                            // Кубок: если селектор сезона = тот же год, что поднял bootstrap — сразу та же таблица (и позже не затирается отдельным запросом).
+                            if year == self.selectedSeasonYear {
+                                self.driversCupTabStandings = fullRows
+                                self.driversCupTabStandingsYear = year
+                            }
+                        }
                         if let leaderStanding = standings.min(by: { $0.positionCurrent < $1.positionCurrent }),
                            let leaderDriver = drivers.first(where: { $0.driverNumber == leaderStanding.driverNumber }) {
                             let leaderName = leaderDriver.fullName
@@ -362,6 +653,7 @@ final class SeasonDataLoader: ObservableObject {
                     }
                 }
                 if !teamsLoadedFromChampionship {
+                    SeasonLoaderLog.line("load: teams fallback (driversLatest / first meeting / static)")
                     func teamsFromDrivers(_ drivers: [OpenF1Driver]) -> [(position: Int, name: String, points: Int)] {
                         var seen: Set<String> = []
                         let names = drivers.compactMap { d -> String? in
@@ -396,19 +688,36 @@ final class SeasonDataLoader: ObservableObject {
                         }
                     }
                 }
+                // Не поднимать `isLoaded` до чемпионатов/команд: иначе сплэш уходит, а таблицы догружаются ещё ~10 с.
+                await MainActor.run { self.isLoaded = true }
+                SeasonLoaderLog.line("load: isLoaded=true (UI may show MainView)")
                 if let nextMeeting = first {
+                    SeasonLoaderLog.line("load: refresh nextMeetingSessions meetingKey=\(nextMeeting.meetingKey)")
                     let sessions = (try? await client.sessions(meetingKey: nextMeeting.meetingKey)) ?? []
                     await MainActor.run {
                         self.nextMeetingSessions = sessions.sorted { ($0.dateStart ?? "") < ($1.dateStart ?? "") }
                         self.syncUpcomingRaceWidget()
                     }
                 }
+                SeasonLoaderLog.line("load: FIA fetchNews")
                 let news = (try? await FIAFeedService.shared.fetchNews()) ?? []
                 await MainActor.run { self.fiaNews = news }
+                SeasonLoaderLog.line("load: news items=\(news.count)")
+                await MainActor.run {
+                    let y = self.selectedSeasonYear
+                    if self.cupTrophyYear != y || self.cupTrophyByDriver.isEmpty {
+                        SeasonLoaderLog.line("load: scheduleCupTrophiesForYear(\(y))")
+                        self.scheduleCupTrophiesForYear(y)
+                    }
+                }
+                SeasonLoaderLog.line("load: bootstrap finished OK")
             } catch {
+                SeasonLoaderLog.line("load: catch — \(error.localizedDescription)")
                 await MainActor.run { self.isLoaded = true }
             }
         }.value
+        await MainActor.run { self.isLoading = false }
+        SeasonLoaderLog.line("load: isLoading=false (task completed)")
     }
 
     private nonisolated static func fallbackSeasonTeams(year: Int) -> [(position: Int, name: String, points: Int)] {
@@ -446,7 +755,7 @@ final class SeasonDataLoader: ObservableObject {
         // Топ‑3 лидеров — из API позиций (реальный порядок в гонке), не по прогрессу на трассе.
         startLivePositionsPoll(sessionKey: sessionKeyToUse ?? skForColors)
 
-        // Часть 1: locations каждые 8 ms. Часть 2: кэш circuitInfo/view обновляем каждые 48 ms; кружки на карте — каждые 8 ms по кэшу.
+        // Снэпшот locations ~60×/с (без objectWillChange на SeasonDataLoader — иначе лагает весь Home).
         var cachedInfo: CircuitInfo?
         var cachedSize: CGSize?
         var cachedView: (any LiveDotsViewUpdating)?
@@ -462,10 +771,9 @@ final class SeasonDataLoader: ObservableObject {
                     guard let self = self else { return }
                     self.liveMapState.locations = snapshot
                     self.liveMapState.locationsVersion &+= 1
-                    self.objectWillChange.send()
                 }
 
-                let doHeavy = (tick % 6 == 0)
+                let doHeavy = (tick % 3 == 0)
                 tick += 1
 
                 if doHeavy {
@@ -495,7 +803,7 @@ final class SeasonDataLoader: ObservableObject {
                     }
                 }
 
-                try? await Task.sleep(nanoseconds: 8_333_333)
+                try? await Task.sleep(nanoseconds: 16_666_666)
             }
         }
     }
@@ -610,7 +918,6 @@ final class SeasonDataLoader: ObservableObject {
                         self.liveMapState.top3LiveDrivers = top3.enumerated().map { idx, p in
                             (idx + 1, p.driverNumber, names[p.driverNumber] ?? "#\(p.driverNumber)", teams[p.driverNumber] ?? "")
                         }
-                        self.objectWillChange.send()
                     }
                 }
                 try? await Task.sleep(nanoseconds: 1_500_000_000)

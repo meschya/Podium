@@ -32,6 +32,11 @@ enum WidgetTeamAccent {
 enum PodiumWidgetDataSync {
     private static let suite = "group.com.EMYM.Podium"
 
+    private static func formatPointsLabel(_ p: Double) -> String {
+        if abs(p - Double(Int(p))) < 0.001 { return "\(Int(p)) pts" }
+        return String(format: "%.1f pts", p)
+    }
+
     private enum Keys {
         static let position = "widget.constructor.position"
         static let team = "widget.constructor.team"
@@ -61,10 +66,10 @@ enum PodiumWidgetDataSync {
         WidgetCenter.shared.reloadTimelines(ofKind: "com.EMYM.Podium.driverLeader.faceCropV4TallPortrait")
     }
 
-    static func pushDriverLeader(fullName: String, points: Int, teamName: String, photoAssetName: String) {
+    static func pushDriverLeader(fullName: String, points: Double, teamName: String, photoAssetName: String) {
         guard let defaults = UserDefaults(suiteName: suite) else { return }
         defaults.set(fullName, forKey: "widget.driver.fullName")
-        defaults.set("\(points) pts", forKey: "widget.driver.points")
+        defaults.set(formatPointsLabel(points), forKey: "widget.driver.points")
         defaults.set(teamName, forKey: "widget.driver.team")
         defaults.set(photoAssetName, forKey: "widget.driver.photoAsset")
         WidgetCenter.shared.reloadTimelines(ofKind: "com.EMYM.Podium.driverLeader.faceCropV4TallPortrait")

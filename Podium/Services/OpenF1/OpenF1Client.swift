@@ -5,6 +5,26 @@
 
 import Foundation
 
+/// Кэш ответов по `session_key` / году — один и тот же JSON для всех пилотов; без этого каждый экран деталки заново тянул сотни запросов.
+private actor OpenF1ResponseCache {
+    private var championshipBySession: [Int: [OpenF1ChampionshipDriver]] = [:]
+    private var positionsBySession: [Int: [OpenF1Position]] = [:]
+    private var meetingsByYear: [Int: [OpenF1Meeting]] = [:]
+    private var sessionsByYear: [Int: [OpenF1Session]] = [:]
+
+    func championship(_ sessionKey: Int) -> [OpenF1ChampionshipDriver]? { championshipBySession[sessionKey] }
+    func setChampionship(_ sessionKey: Int, _ rows: [OpenF1ChampionshipDriver]) { championshipBySession[sessionKey] = rows }
+
+    func positions(_ sessionKey: Int) -> [OpenF1Position]? { positionsBySession[sessionKey] }
+    func setPositions(_ sessionKey: Int, _ rows: [OpenF1Position]) { positionsBySession[sessionKey] = rows }
+
+    func meetings(year: Int) -> [OpenF1Meeting]? { meetingsByYear[year] }
+    func setMeetings(year: Int, _ rows: [OpenF1Meeting]) { meetingsByYear[year] = rows }
+
+    func sessions(year: Int) -> [OpenF1Session]? { sessionsByYear[year] }
+    func setSessions(year: Int, _ rows: [OpenF1Session]) { sessionsByYear[year] = rows }
+}
+
 enum OpenF1Error: Error, LocalizedError {
     case invalidURL
     case noData
@@ -27,29 +47,44 @@ final class OpenF1Client {
     static let shared = OpenF1Client()
     private let baseURL = "https://api.openf1.org/v1"
     private let session: URLSession
+    private let responseCache = OpenF1ResponseCache()
 
     private init(session: URLSession = .shared) {
         self.session = session
     }
 
     func meetings(year: Int? = nil, countryName: String? = nil) async throws -> [OpenF1Meeting] {
+        if let y = year, countryName == nil, let cached = await responseCache.meetings(year: y) {
+            return cached
+        }
         var components = URLComponents(string: "\(baseURL)/meetings")!
         var queryItems: [URLQueryItem] = []
         if let year { queryItems.append(URLQueryItem(name: "year", value: "\(year)")) }
         if let countryName { queryItems.append(URLQueryItem(name: "country_name", value: countryName)) }
         if !queryItems.isEmpty { components.queryItems = queryItems }
         guard let url = components.url else { throw OpenF1Error.invalidURL }
-        return try await decode([OpenF1Meeting].self, url: url)
+        let result = try await decode([OpenF1Meeting].self, url: url)
+        if let y = year, countryName == nil {
+            await responseCache.setMeetings(year: y, result)
+        }
+        return result
     }
 
     func sessions(year: Int? = nil, meetingKey: Int? = nil) async throws -> [OpenF1Session] {
+        if let y = year, meetingKey == nil, let cached = await responseCache.sessions(year: y) {
+            return cached
+        }
         var components = URLComponents(string: "\(baseURL)/sessions")!
         var queryItems: [URLQueryItem] = []
         if let year { queryItems.append(URLQueryItem(name: "year", value: "\(year)")) }
         if let meetingKey { queryItems.append(URLQueryItem(name: "meeting_key", value: "\(meetingKey)")) }
         if !queryItems.isEmpty { components.queryItems = queryItems }
         guard let url = components.url else { throw OpenF1Error.invalidURL }
-        return try await decode([OpenF1Session].self, url: url)
+        let result = try await decode([OpenF1Session].self, url: url)
+        if let y = year, meetingKey == nil {
+            await responseCache.setSessions(year: y, result)
+        }
+        return result
     }
 
     func sessionsLatest() async throws -> [OpenF1Session] {
@@ -73,8 +108,13 @@ final class OpenF1Client {
     }
 
     func championshipDrivers(sessionKey: Int) async throws -> [OpenF1ChampionshipDriver] {
+        if let cached = await responseCache.championship(sessionKey) {
+            return cached
+        }
         guard let url = URL(string: "\(baseURL)/championship_drivers?session_key=\(sessionKey)") else { throw OpenF1Error.invalidURL }
-        return try await decode([OpenF1ChampionshipDriver].self, url: url)
+        let result = try await decode([OpenF1ChampionshipDriver].self, url: url)
+        await responseCache.setChampionship(sessionKey, result)
+        return result
     }
 
     func championshipTeams(sessionKey: Int) async throws -> [OpenF1ChampionshipTeam] {
@@ -88,15 +128,21 @@ final class OpenF1Client {
     }
 
     func positions(sessionKey: Int) async throws -> [OpenF1Position] {
+        if let cached = await responseCache.positions(sessionKey) {
+            return cached
+        }
         // API path is "position" (singular); try both for compatibility
         let urlString = "\(baseURL)/position?session_key=\(sessionKey)"
         guard let url = URL(string: urlString) else { throw OpenF1Error.invalidURL }
+        let result: [OpenF1Position]
         do {
-            return try await decode([OpenF1Position].self, url: url)
+            result = try await decode([OpenF1Position].self, url: url)
         } catch {
             guard let url2 = URL(string: "\(baseURL)/positions?session_key=\(sessionKey)") else { throw error }
-            return try await decode([OpenF1Position].self, url: url2)
+            result = try await decode([OpenF1Position].self, url: url2)
         }
+        await responseCache.setPositions(sessionKey, result)
+        return result
     }
 
     /// Позиции машин на трассе. Для real-time нужна подписка OpenF1 + MQTT (wss://mqtt.openf1.org:8084/mqtt, topic v1/location).
@@ -126,11 +172,60 @@ final class OpenF1Client {
         return try await decode(CircuitInfo.self, url: url)
     }
 
-    private static let raceSessionName = "Race"
+    /// Порядок номеров по полю `position` (снимок с максимальным числом машин): `[P1, P2, …]`.
+    /// У каждого пилота берём **лучшую** (минимальную) позицию в снимке — так убираем дубликаты строк.
+    func driverOrderByLatestPositionSnapshot(sessionKey: Int) async -> [Int] {
+        guard let positions = try? await positions(sessionKey: sessionKey), !positions.isEmpty else { return [] }
+        let byDate = Dictionary(grouping: positions, by: { $0.date })
+        var bestDate: String?
+        var maxCount = 0
+        for (date, list) in byDate {
+            let count = Set(list.map(\.driverNumber)).count
+            if count > maxCount || (count == maxCount && (bestDate == nil || date > bestDate!)) {
+                maxCount = count
+                bestDate = date
+            }
+        }
+        guard let bestDate, let snapshot = byDate[bestDate] else { return [] }
+        var bestPosByDriver: [Int: Int] = [:]
+        for p in snapshot where p.position > 0 {
+            let n = p.driverNumber
+            if let old = bestPosByDriver[n] {
+                if p.position < old { bestPosByDriver[n] = p.position }
+            } else {
+                bestPosByDriver[n] = p.position
+            }
+        }
+        return bestPosByDriver
+            .sorted { a, b in
+                if a.value != b.value { return a.value < b.value }
+                return a.key < b.key
+            }
+            .map(\.key)
+    }
+
+    /// Финиш в гонке (1 = победа). Сначала лёгкий `position`; `raceResults` — только при `allowHeavyRaceResultsFallback`.
+    func raceFinishPosition(
+        meetingKey: Int,
+        raceSessionKey: Int,
+        driverNumber: Int,
+        allowHeavyRaceResultsFallback: Bool = true
+    ) async -> Int? {
+        let order = await driverOrderByLatestPositionSnapshot(sessionKey: raceSessionKey)
+        if let idx = order.firstIndex(of: driverNumber) {
+            return idx + 1
+        }
+        guard allowHeavyRaceResultsFallback else { return nil }
+        if let results = try? await raceResults(meetingKey: meetingKey),
+           let row = results.first(where: { $0.driverNumber == driverNumber }) {
+            return row.position
+        }
+        return nil
+    }
 
     func raceResults(meetingKey: Int) async throws -> [RaceResultRow] {
         let sessions = try await self.sessions(meetingKey: meetingKey)
-        let raceSession: OpenF1Session? = sessions.first(where: { $0.sessionName == Self.raceSessionName || $0.sessionType?.lowercased().contains("race") == true })
+        let raceSession: OpenF1Session? = OpenF1Session.grandPrixRaceSession(in: sessions)
             ?? sessions.sorted(by: { ($0.dateStart ?? "") > ($1.dateStart ?? "") }).first
         guard let raceSession = raceSession else {
             return []
@@ -149,7 +244,8 @@ final class OpenF1Client {
 
         let championship = (try? await championshipDrivers(sessionKey: sessionKey)) ?? []
         let pointsScoredByDriver: [Int: Int] = Dictionary(uniqueKeysWithValues: championship.map { d in
-            (d.driverNumber, max(0, d.pointsCurrent - (d.pointsStart ?? 0)))
+            let raw = max(0, d.pointsCurrent - (d.pointsStart ?? 0))
+            return (d.driverNumber, Int(round(raw)))
         })
         let allDriverNumbers = drivers.map(\.driverNumber)
 
@@ -191,15 +287,16 @@ final class OpenF1Client {
                     timeByDriver[num] = "—"
                 }
             }
-            let latestDate = intervals.map(\.date).max()
-            if let latestDate = latestDate {
-                let snapshot = intervals.filter { $0.date == latestDate }
-                orderedDriverNumbers = snapshot.sorted { a, b in
-                    let ga = a.gapToLeader.map { $0.secondsValue ?? .infinity } ?? 0
-                    let gb = b.gapToLeader.map { $0.secondsValue ?? .infinity } ?? 0
-                    return ga < gb
-                }.map(\.driverNumber)
-            }
+            // Важно: сортируем по последнему интервалу каждого пилота.
+            // Использование "последней даты из всех интервалов" часто даёт снэпшот с 1 пилотом.
+            orderedDriverNumbers = lastPerDriver.values
+                .sorted { a, b in
+                    let ga = a.gapToLeader?.secondsValue ?? .infinity
+                    let gb = b.gapToLeader?.secondsValue ?? .infinity
+                    if ga != gb { return ga < gb }
+                    return a.driverNumber < b.driverNumber
+                }
+                .map(\.driverNumber)
         }
 
         // 2) Position API = только если intervals пустые (резервный порядок).

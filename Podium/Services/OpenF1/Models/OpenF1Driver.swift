@@ -15,6 +15,8 @@ struct OpenF1Driver: Codable, Identifiable {
     var teamName: String?
     var teamColour: String?
     var headshotUrl: String?
+    /// Часто `null` в OpenF1; тогда в UI используем запасной маппинг по имени.
+    var countryCode: String?
     var sessionKey: Int?
     var meetingKey: Int?
 
@@ -30,6 +32,7 @@ struct OpenF1Driver: Codable, Identifiable {
         case teamName = "team_name"
         case teamColour = "team_colour"
         case headshotUrl = "headshot_url"
+        case countryCode = "country_code"
         case sessionKey = "session_key"
         case meetingKey = "meeting_key"
     }

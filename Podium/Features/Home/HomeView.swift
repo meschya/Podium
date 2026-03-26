@@ -20,6 +20,11 @@ struct HomeView: View {
         return f.string(from: Date())
     }
 
+    private func formatHomeTeamPoints(_ p: Double) -> String {
+        if abs(p - Double(Int(p))) < 0.001 { return "\(Int(p))" }
+        return String(format: "%.1f", p)
+    }
+
     var body: some View {
         NavigationStack {
             GeometryReader { geo in
@@ -36,7 +41,7 @@ struct HomeView: View {
                                     HStack(alignment: .center, spacing: 16) {
                                         // Текст героя всегда — раньше он был скрыт вместе с картой до showHeroCircuitMap,
                                         // из‑за этого казалось, что «данных нет».
-                                        heroLeftContentView
+                                        HomeHeroLeftContentView()
                                         Spacer(minLength: 12)
                                         if showHeroCircuitMap { heroCircuitMapView }
                             }
@@ -64,23 +69,23 @@ struct HomeView: View {
                 .ignoresSafeArea(edges: .top)
             }
             }
+            // Иначе GeometryReader в NavigationStack часто схлопывается по высоте до 0 — виден только чёрный фон.
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .sheet(item: $newsURLInApp) { wrap in
                 SafariView(url: wrap.url) { newsURLInApp = nil }
             }
             .navigationBarHidden(true)
-            .task { await loader.load() }
             .task {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                     showHeroCircuitMap = true
                 }
             }
             .task {
-                // Проверка видимости hero / Live каждую 1 с — стрим включён, если на экране Home hero или таб Live.
                 while !Task.isCancelled {
-                    let (meeting, heroVisible, liveVisible) = await MainActor.run {
-                        (loader.meeting, loader.isHeroSectionVisible, loader.isLiveViewVisible)
+                    let (meeting, heroVisible) = await MainActor.run {
+                        (loader.meeting, loader.isHeroSectionVisible)
                     }
-                    if meeting != nil && (heroVisible || liveVisible) {
+                    if meeting != nil && heroVisible {
                         loader.startLiveStreamIfNeeded()
                     } else {
                         loader.stopLiveStream()
@@ -253,167 +258,11 @@ struct HomeView: View {
         return names[code] ?? m.location
     }
 
-    private var heroLeftContentView: some View {
-        let top3 = loader.liveMapState.top3LiveDrivers
-        let hasLocations = !loader.liveMapState.locations.isEmpty
-        let isLiveNow = hasLocations
-        return VStack(alignment: .leading, spacing: 6) {
-            if isLiveNow {
-                Text("Live")
-                    .font(Font.custom(FontWeight.titilliumWebSemiBold.rawValue, size: 13))
-                    .foregroundStyle(.white.opacity(0.85))
-                if !top3.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(top3, id: \.driverNumber) { row in
-                            HStack(spacing: 8) {
-                                Circle()
-                                    .fill(teamColor(for: row.teamName))
-                                    .frame(width: 14, height: 14)
-                                Text("\(row.position). \(row.name)")
-                                    .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 13))
-                                    .foregroundStyle(.white)
-                                    .lineLimit(1)
-                                Spacer()
-                            }
-                        }
-                    }
-                } else {
-                    Text("\(loader.liveMapState.locations.count) машин на трассе")
-                        .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 12))
-                        .foregroundStyle(.white.opacity(0.8))
-                }
-            } else if let m = loader.meeting {
-                Text(m.meetingName)
-                    .font(Font.custom(FontWeight.titilliumWebSemiBold.rawValue, size: 16))
-                    .foregroundStyle(.white)
-                    .lineLimit(2)
-                if let str = heroGpDateString(m) {
-                    Text(str)
-                        .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 13))
-                        .foregroundStyle(Color(.systemGray))
-                }
-                if let (start, eventName) = heroNextEventTarget(), start > Date() {
-                    heroCountdownView(to: start, eventName: eventName)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.leading, 20)
-        .allowsHitTesting(false)
-    }
-
     private func heroDateString(_ date: Date) -> String {
         let f = DateFormatter()
         f.dateFormat = "EEE d MMM yyyy"
         f.locale = Locale(identifier: "en_US_POSIX")
         return f.string(from: date)
-    }
-
-    /// "6 Mar - 8 Mar, 2026" если несколько дней, иначе "8 Mar, 2026"
-    private func heroGpDateString(_ m: OpenF1Meeting) -> String? {
-        let cal = Calendar.current
-        guard let start = m.parsedDateStart else { return nil }
-        let startDay = cal.startOfDay(for: start)
-        let end: Date
-        if let e = m.parsedDateEnd {
-            end = e
-        } else {
-            end = start
-        }
-        let endDay = cal.startOfDay(for: end)
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "d MMM"
-        let year = cal.component(.year, from: start)
-        if startDay != endDay {
-            return "\(f.string(from: start)) - \(f.string(from: end)), \(year)"
-        }
-        return "\(f.string(from: start)), \(year)"
-    }
-
-    private func heroCountdownView(to date: Date, eventName: String?) -> some View {
-        TimelineView(.periodic(from: .now, by: 1.0)) { context in
-            let c = countdownComponents(from: context.date, to: date)
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 4) {
-                    heroCountdownBlock(value: c.days, label: "d")
-                    heroCountdownBlock(value: c.hours, label: "h")
-                    heroCountdownBlock(value: c.minutes, label: "m")
-                    heroCountdownBlock(value: c.seconds, label: "s")
-                }
-                if let name = eventName, !name.isEmpty {
-                    HStack(spacing: 2) {
-                        Text("until ")
-                            .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 11))
-                            .foregroundStyle(.white.opacity(0.85))
-                        Text(name)
-                            .font(Font.custom(FontWeight.titilliumWebSemiBold.rawValue, size: 11))
-                            .foregroundStyle(.white)
-                    }
-                }
-            }
-        }
-    }
-
-    /// Следующее по времени событие: дата и название для таймера и подписи "until Race" / "until Quali".
-    private func heroNextEventTarget() -> (Date, String)? {
-        let now = Date()
-        let tz = loader.meeting.flatMap { eventTimeZone(from: $0.gmtOffset) } ?? .current
-        for s in loader.nextMeetingSessions {
-            guard let start = parseSessionDate(s.dateStart, eventTimeZone: tz), start > now else { continue }
-            return (start, sessionShortName(s.sessionName))
-        }
-        guard let m = loader.meeting, let start = m.parsedDateStart, start > now else { return nil }
-        return (start, "Race")
-    }
-
-    private func eventTimeZone(from gmtOffset: String?) -> TimeZone? {
-        guard let s = gmtOffset?.trimmingCharacters(in: .whitespaces), !s.isEmpty else { return nil }
-        let sign = s.hasPrefix("-") ? -1 : 1
-        let cleaned = s.replacingOccurrences(of: "UTC", with: "").trimmingCharacters(in: .whitespaces)
-        let parts = cleaned.split(separator: ":")
-        let h = Int(parts.first ?? "0") ?? 0
-        let m = parts.count > 1 ? (Int(parts[1]) ?? 0) : 0
-        return TimeZone(secondsFromGMT: sign * (abs(h) * 3600 + min(59, m) * 60))
-    }
-
-    private func parseSessionDate(_ s: String?, eventTimeZone: TimeZone?) -> Date? {
-        guard let s, !s.isEmpty else { return nil }
-        let iso = ISO8601DateFormatter()
-        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = iso.date(from: s) { return d }
-        iso.formatOptions = [.withInternetDateTime]
-        if let d = iso.date(from: s) { return d }
-        if !s.contains("Z"), let tz = eventTimeZone ?? TimeZone(identifier: "UTC") {
-            let f = DateFormatter()
-            f.locale = Locale(identifier: "en_US_POSIX")
-            f.timeZone = tz
-            f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS"
-            if let d = f.date(from: s) { return d }
-            f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
-            if let d = f.date(from: s) { return d }
-        }
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone(identifier: "UTC")
-        f.dateFormat = "yyyy-MM-dd"
-        return f.date(from: s)
-    }
-
-    private func heroCountdownBlock(value: Int, label: String) -> some View {
-        VStack(spacing: 1) {
-            Text(String(format: "%02d", value))
-                .font(Font.custom(FontWeight.titilliumWebSemiBold.rawValue, size: 13))
-                .monospacedDigit()
-                .foregroundStyle(.white)
-            Text(label)
-                .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 8))
-                .foregroundStyle(.white.opacity(0.85))
-        }
-        .frame(minWidth: 26)
-        .padding(.vertical, 4)
-        .padding(.horizontal, 3)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 6))
     }
 
     private var heroCircuitMapView: some View {
@@ -450,7 +299,7 @@ struct HomeView: View {
                                     .frame(width: 32, height: 2)
                                 Spacer().frame(width: 12)
                             }
-                            teamCard(position: row.position, name: row.name, points: row.points)
+                            teamCard(position: row.position, name: row.name, points: Double(row.points))
                         }
                     }
                     .padding(.horizontal, 20)
@@ -459,7 +308,7 @@ struct HomeView: View {
         )
     }
 
-    private func teamCard(position: Int, name: String, points: Int) -> some View {
+    private func teamCard(position: Int, name: String, points: Double) -> some View {
         let logoName = teamLogoImageName(name)
         let bolidName = TeamBolidAssetName.resolve(name)
         let tint = teamColor(for: name)
@@ -471,7 +320,7 @@ struct HomeView: View {
                         .foregroundStyle(.white)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
-                    Text("\(points) pts")
+                    Text("\(formatHomeTeamPoints(points)) pts")
                         .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 11))
                         .foregroundStyle(.white.opacity(0.7))
                 }
@@ -934,6 +783,206 @@ struct HomeView: View {
                 return String(u)
             }
             .joined()
+    }
+}
+
+/// Левая колонка героя: подписана только на `LiveMapState`, чтобы MQTT не перерисовывал весь `HomeView` ~120×/с.
+private struct HomeHeroLeftContentView: View {
+    @EnvironmentObject private var loader: SeasonDataLoader
+    @EnvironmentObject private var liveMapState: LiveMapState
+
+    var body: some View {
+        let top3 = liveMapState.top3LiveDrivers
+        let hasLocations = !liveMapState.locations.isEmpty
+        let isLiveNow = hasLocations
+        return VStack(alignment: .leading, spacing: 6) {
+            if isLiveNow {
+                Text("Live")
+                    .font(Font.custom(FontWeight.titilliumWebSemiBold.rawValue, size: 13))
+                    .foregroundStyle(.white.opacity(0.85))
+                if !top3.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(top3, id: \.driverNumber) { row in
+                            HStack(spacing: 8) {
+                                Circle()
+                                    .fill(heroTeamColor(for: row.teamName))
+                                    .frame(width: 14, height: 14)
+                                Text("\(row.position). \(row.name)")
+                                    .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 13))
+                                    .foregroundStyle(.white)
+                                    .lineLimit(1)
+                                Spacer()
+                            }
+                        }
+                    }
+                } else {
+                    Text("\(liveMapState.locations.count) машин на трассе")
+                        .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 12))
+                        .foregroundStyle(.white.opacity(0.8))
+                }
+            } else if let m = loader.meeting {
+                Text(m.meetingName)
+                    .font(Font.custom(FontWeight.titilliumWebSemiBold.rawValue, size: 16))
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                if let str = heroGpDateString(m) {
+                    Text(str)
+                        .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 13))
+                        .foregroundStyle(Color(.systemGray))
+                }
+                if let (start, eventName) = heroNextEventTarget(), start > Date() {
+                    heroCountdownView(to: start, eventName: eventName)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.leading, 20)
+        .allowsHitTesting(false)
+    }
+
+    private func heroGpDateString(_ m: OpenF1Meeting) -> String? {
+        let cal = Calendar.current
+        guard let start = m.parsedDateStart else { return nil }
+        let startDay = cal.startOfDay(for: start)
+        let end: Date
+        if let e = m.parsedDateEnd {
+            end = e
+        } else {
+            end = start
+        }
+        let endDay = cal.startOfDay(for: end)
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "d MMM"
+        let year = cal.component(.year, from: start)
+        if startDay != endDay {
+            return "\(f.string(from: start)) - \(f.string(from: end)), \(year)"
+        }
+        return "\(f.string(from: start)), \(year)"
+    }
+
+    private func heroCountdownView(to date: Date, eventName: String?) -> some View {
+        TimelineView(.periodic(from: .now, by: 1.0)) { context in
+            let c = heroCountdownComponents(from: context.date, to: date)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 4) {
+                    heroCountdownBlock(value: c.days, label: "d")
+                    heroCountdownBlock(value: c.hours, label: "h")
+                    heroCountdownBlock(value: c.minutes, label: "m")
+                    heroCountdownBlock(value: c.seconds, label: "s")
+                }
+                if let name = eventName, !name.isEmpty {
+                    HStack(spacing: 2) {
+                        Text("until ")
+                            .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 11))
+                            .foregroundStyle(.white.opacity(0.85))
+                        Text(name)
+                            .font(Font.custom(FontWeight.titilliumWebSemiBold.rawValue, size: 11))
+                            .foregroundStyle(.white)
+                    }
+                }
+            }
+        }
+    }
+
+    private func heroNextEventTarget() -> (Date, String)? {
+        let now = Date()
+        let tz = loader.meeting.flatMap { eventTimeZone(from: $0.gmtOffset) } ?? .current
+        for s in loader.nextMeetingSessions {
+            guard let start = parseSessionDate(s.dateStart, eventTimeZone: tz), start > now else { continue }
+            return (start, heroSessionShortName(s.sessionName))
+        }
+        guard let m = loader.meeting, let start = m.parsedDateStart, start > now else { return nil }
+        return (start, "Race")
+    }
+
+    private func eventTimeZone(from gmtOffset: String?) -> TimeZone? {
+        guard let s = gmtOffset?.trimmingCharacters(in: .whitespaces), !s.isEmpty else { return nil }
+        let sign = s.hasPrefix("-") ? -1 : 1
+        let cleaned = s.replacingOccurrences(of: "UTC", with: "").trimmingCharacters(in: .whitespaces)
+        let parts = cleaned.split(separator: ":")
+        let h = Int(parts.first ?? "0") ?? 0
+        let m = parts.count > 1 ? (Int(parts[1]) ?? 0) : 0
+        return TimeZone(secondsFromGMT: sign * (abs(h) * 3600 + min(59, m) * 60))
+    }
+
+    private func parseSessionDate(_ s: String?, eventTimeZone: TimeZone?) -> Date? {
+        guard let s, !s.isEmpty else { return nil }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = iso.date(from: s) { return d }
+        iso.formatOptions = [.withInternetDateTime]
+        if let d = iso.date(from: s) { return d }
+        if !s.contains("Z"), let tz = eventTimeZone ?? TimeZone(identifier: "UTC") {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.timeZone = tz
+            f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS"
+            if let d = f.date(from: s) { return d }
+            f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+            if let d = f.date(from: s) { return d }
+        }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "yyyy-MM-dd"
+        return f.date(from: s)
+    }
+
+    private func heroCountdownBlock(value: Int, label: String) -> some View {
+        VStack(spacing: 1) {
+            Text(String(format: "%02d", value))
+                .font(Font.custom(FontWeight.titilliumWebSemiBold.rawValue, size: 13))
+                .monospacedDigit()
+                .foregroundStyle(.white)
+            Text(label)
+                .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 8))
+                .foregroundStyle(.white.opacity(0.85))
+        }
+        .frame(minWidth: 26)
+        .padding(.vertical, 4)
+        .padding(.horizontal, 3)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func heroCountdownComponents(from now: Date, to target: Date) -> (days: Int, hours: Int, minutes: Int, seconds: Int) {
+        let delta = max(0, target.timeIntervalSince(now))
+        let d = Int(delta) / 86400
+        let h = (Int(delta) % 86400) / 3600
+        let m = (Int(delta) % 3600) / 60
+        let s = Int(delta) % 60
+        return (d, h, m, s)
+    }
+
+    private func heroSessionShortName(_ name: String) -> String {
+        let lower = name.lowercased()
+        if lower.contains("practice") || lower.contains("fp") {
+            if lower.contains("1") { return "FP1" }
+            if lower.contains("2") { return "FP2" }
+            if lower.contains("3") { return "FP3" }
+            return "FP"
+        }
+        if lower.contains("qualifying") || lower.contains("quali") { return "Quali" }
+        if lower.contains("race") { return "Race" }
+        if lower.contains("sprint") { return "Sprint" }
+        return name
+    }
+
+    private func heroTeamColor(for teamName: String) -> Color {
+        let lower = teamName.lowercased()
+        if lower.contains("red bull") && !lower.contains("racing bulls") { return Color.AppColors.redBull }
+        if lower.contains("racing bulls") || lower.contains("rb ") || lower == "rb" { return Color.AppColors.racingBulls }
+        if lower.contains("ferrari") { return Color.AppColors.ferrari }
+        if lower.contains("mclaren") { return Color.AppColors.mclaren }
+        if lower.contains("mercedes") { return Color.AppColors.mercedes }
+        if lower.contains("aston martin") { return Color.AppColors.astonMartin }
+        if lower.contains("alpine") { return Color.AppColors.alpine }
+        if lower.contains("williams") { return Color.AppColors.williams }
+        if lower.contains("haas") { return Color.AppColors.haas }
+        if lower.contains("sauber") || lower.contains("kick") { return Color.AppColors.haas }
+        if lower.contains("audi") { return Color.AppColors.audi }
+        if lower.contains("cadillac") { return Color.AppColors.cadillac }
+        return Color(.secondarySystemGroupedBackground)
     }
 }
 

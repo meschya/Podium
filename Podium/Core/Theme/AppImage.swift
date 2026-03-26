@@ -46,20 +46,26 @@ extension String {
         static let flag_australia: String = "australia"
         static let flag_austria: String = "austria"
         static let flag_azerbaijan: String = "azerbaijan"
+        static let flag_argentina: String = "argentina"
         static let flag_bahrain: String = "bahrain"
         static let flag_belgium: String = "belgium"
         static let flag_brazil: String = "brazil"
         static let flag_canada: String = "canada"
         static let flag_china: String = "china"
+        static let flag_finland: String = "finland"
+        static let flag_france: String = "france"
+        static let flag_germany: String = "germany"
         static let flag_hungary: String = "hungary"
         static let flag_italy: String = "italy"
         static let flag_japan: String = "japan"
         static let flag_mexico: String = "mexico"
         static let flag_monaco: String = "monaco"
         static let flag_netherlands: String = "netherlands"
+        static let flag_new_zealand: String = "new_zealand"
         static let flag_qatar: String = "qatar"
         static let flag_saudi_arabia: String = "saudi_arabia"
         static let flag_singapore: String = "singapore"
+        static let flag_thailand: String = "thailand"
         static let flag_spain: String = "spain"
         static let flag_united_arab_emirates: String = "united_arab_emirates"
         static let flag_united_kingdom: String = "united_kingdom"
@@ -72,21 +78,27 @@ extension String {
             case "AU": return flag_australia
             case "AT": return flag_austria
             case "AZ": return flag_azerbaijan
+            case "AR": return flag_argentina
             case "BH": return flag_bahrain
             case "BE": return flag_belgium
             case "BR": return flag_brazil
             case "CA": return flag_canada
             case "CN": return flag_china
+            case "DE": return flag_germany
+            case "FI": return flag_finland
+            case "FR": return flag_france
             case "HU": return flag_hungary
             case "IT": return flag_italy
             case "JP": return flag_japan
             case "MX": return flag_mexico
             case "MC": return flag_monaco
             case "NL": return flag_netherlands
+            case "NZ": return flag_new_zealand
             case "QA": return flag_qatar
             case "SA": return flag_saudi_arabia
             case "SG": return flag_singapore
             case "ES": return flag_spain
+            case "TH": return flag_thailand
             case "AE": return flag_united_arab_emirates
             case "GB": return flag_united_kingdom
             case "US": return flag_united_states
