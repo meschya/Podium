@@ -19,7 +19,7 @@ struct TrackMapView: View {
             }
         }
         .background(cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: compact ? 0 : 8))
     }
 
     private var fullBody: some View {

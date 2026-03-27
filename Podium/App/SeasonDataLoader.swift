@@ -12,7 +12,7 @@ private enum SeasonLoaderLog {
 
 /// Обновление точек на карте без SwiftUI — позиции и цвета команд.
 protocol LiveDotsViewUpdating: AnyObject {
-    func setPositions(_ positions: [CGPoint], colors: [UIColor])
+    func setPositions(_ positions: [CGPoint], colors: [UIColor], driverNumbers: [Int])
 }
 
 /// Состояние только для лайв-карты. Подписывается только карта.
@@ -39,6 +39,10 @@ private actor LiveLocationBuffer {
 
 @MainActor
 final class SeasonDataLoader: ObservableObject {
+    private nonisolated static func liveLog(_ message: String) {
+        let ms = Int(Date().timeIntervalSince1970 * 1000) % 1_000_000
+        Swift.print("[LiveDiag \(ms)] \(message)")
+    }
     @Published var meeting: OpenF1Meeting?
     @Published var circuitInfo: CircuitInfo?
     @Published var circuitInfoByMeetingKey: [Int: CircuitInfo] = [:]
@@ -71,6 +75,14 @@ final class SeasonDataLoader: ObservableObject {
     private var liveFlushTask: Task<Void, Never>?
     /// Опрос позиций в гонке для топ‑3 лидеров (REST OpenF1).
     private var livePositionsPollTask: Task<Void, Never>?
+    /// Диагностика: время последнего апдейта top3 на UI.
+    private var lastTop3UpdateAt: Date?
+    /// Стабилизация списка: последний показанный порядок top‑3.
+    private var lastTop3DriverOrder: [Int] = []
+    /// MQTT top3: свежесть и анти-дребезг кандидата.
+    private var lastMqttTop3UpdateAt: Date?
+    private var mqttTop3Candidate: [Int] = []
+    private var mqttTop3CandidateHits: Int = 0
     @Published var fiaNews: [FIANewsItem] = []
     @Published var isLoaded = false
     @Published var isLoading = false
@@ -747,10 +759,25 @@ final class SeasonDataLoader: ObservableObject {
         var cachedView: (any LiveDotsViewUpdating)?
         var cachedPointsByDriver: [Int: CGPoint] = [:]
         var tick = 0
+        var diagLastAt = Date.distantPast
+        var diagPrevLocationsVersion: Int = 0
         liveFlushTask = Task.detached(priority: .userInitiated) { [weak self] in
             guard let self = self else { return }
             while !Task.isCancelled {
                 let snapshot = await self.liveLocationBuffer.snapshot()
+                let newestDateString = snapshot.max(by: { $0.date < $1.date })?.date
+                let snapshotAgeMs: Int = {
+                    guard let newestDateString else { return -1 }
+                    let iso = ISO8601DateFormatter()
+                    iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                    let parsed = iso.date(from: newestDateString) ?? {
+                        let iso2 = ISO8601DateFormatter()
+                        iso2.formatOptions = [.withInternetDateTime]
+                        return iso2.date(from: newestDateString)
+                    }()
+                    guard let newestDate = parsed else { return -1 }
+                    return max(0, Int(Date().timeIntervalSince(newestDate) * 1000))
+                }()
 
                 // Всегда пушим locations и версию — карта обновляется часто.
                 DispatchQueue.main.async { [weak self] in
@@ -782,14 +809,54 @@ final class SeasonDataLoader: ObservableObject {
                     cachedPointsByDriver = cachedPointsByDriver.filter { latestByDriver[$0.key] != nil }
                     let points = driverNumbers.compactMap { cachedPointsByDriver[$0] }
                     let driverNumbersCopy = driverNumbers
+
+                    // Top-3 из MQTT: только подтверждённый порядок (анти-дребезг).
+                    if !driverNumbersCopy.isEmpty {
+                        let top3Nums = Self.top3DriverNumbersByProgress(snapshot: snapshot, circuitInfo: info)
+                        DispatchQueue.main.async { [weak self] in
+                            guard let self = self else { return }
+                            if Self.sameTop3(self.mqttTop3Candidate, top3Nums) {
+                                self.mqttTop3CandidateHits += 1
+                            } else {
+                                self.mqttTop3Candidate = top3Nums
+                                self.mqttTop3CandidateHits = 1
+                            }
+                            // Применяем только когда один и тот же порядок пришёл минимум дважды подряд.
+                            guard self.mqttTop3CandidateHits >= 2 else { return }
+                            self.lastMqttTop3UpdateAt = Date()
+                            self.lastTop3UpdateAt = Date()
+                            guard !Self.sameTop3(self.lastTop3DriverOrder, top3Nums) else { return }
+                            let names = self.liveDriverNames
+                            let teams = self.liveDriverTeamNames
+                            withAnimation(.easeInOut(duration: 0.35)) {
+                                self.liveMapState.top3LiveDrivers = top3Nums.enumerated().map { idx, num in
+                                    (idx + 1, num, names[num] ?? "#\(num)", teams[num] ?? "")
+                                }
+                            }
+                            self.lastTop3DriverOrder = top3Nums
+                        }
+                    }
                     DispatchQueue.main.async { [weak self] in
                         guard let self = self else { return }
                         let colors = driverNumbersCopy.map { self.liveDriverColors[$0] ?? .gray }
-                        view.setPositions(points, colors: colors)
+                        view.setPositions(points, colors: colors, driverNumbers: driverNumbersCopy)
                     }
                 }
 
-                try? await Task.sleep(nanoseconds: 16_666_666)
+                if Date().timeIntervalSince(diagLastAt) >= 2.0 {
+                    diagLastAt = Date()
+                    let uiInfo = await MainActor.run { () -> (Int, Int, Int) in
+                        let currentVersion = self.liveMapState.locationsVersion
+                        let delta = currentVersion - diagPrevLocationsVersion
+                        diagPrevLocationsVersion = currentVersion
+                        let top3Count = self.liveMapState.top3LiveDrivers.count
+                        let top3AgeMs = self.lastTop3UpdateAt.map { max(0, Int(Date().timeIntervalSince($0) * 1000)) } ?? -1
+                        return (delta, top3Count, top3AgeMs)
+                    }
+                    Self.liveLog("flush snapshot=\(snapshot.count) ageMs=\(snapshotAgeMs) locVersionDelta=\(uiInfo.0) top3=\(uiInfo.1) top3AgeMs=\(uiInfo.2)")
+                }
+
+                try? await Task.sleep(nanoseconds: 8_333_333)
             }
         }
     }
@@ -811,6 +878,11 @@ final class SeasonDataLoader: ObservableObject {
             return (driverNum, p)
         }
         return withProgress.sorted { $0.1 > $1.1 }.prefix(3).map(\.0)
+    }
+
+    private nonisolated static func sameTop3(_ lhs: [Int], _ rhs: [Int]) -> Bool {
+        guard lhs.count == rhs.count else { return false }
+        return zip(lhs, rhs).allSatisfy(==)
     }
 
     /// Позиция на карте по координатам OpenF1 (trackX, trackY). Проекция на трассу. Координаты в одной системе с circuit_info (OpenF1 doc).
@@ -880,16 +952,18 @@ final class SeasonDataLoader: ObservableObject {
         liveDotsSize = size
     }
 
-    /// Топ‑3 лидеров из API позиций (реальный порядок в гонке). Опрос раз в ~1.5 с.
+    /// Топ‑3 лидеров из API позиций (реальный порядок в гонке). Опрос раз в ~0.7 с.
     private func startLivePositionsPoll(sessionKey initialSk: Int?) {
         livePositionsPollTask?.cancel()
         livePositionsPollTask = Task.detached(priority: .utility) { [weak self] in
             guard let self = self else { return }
+            var pollIdx = 0
             while !Task.isCancelled {
                 let sk = await MainActor.run {
                     self.currentLiveSessionKey() ?? self.lastLiveStreamSessionKey ?? self.nextMeetingSessions.first?.sessionKey ?? initialSk
                 }
                 if let sk = sk {
+                    let startedAt = Date()
                     let list = (try? await OpenF1Client.shared.positions(sessionKey: sk)) ?? []
                     // Последняя запись по каждому гонщику (по date), затем сортировка по position — это реальный порядок в гонке.
                     let byDriver: [Int: OpenF1Position] = list.reduce(into: [:]) { acc, p in
@@ -899,14 +973,29 @@ final class SeasonDataLoader: ObservableObject {
                     let top3 = Array(sorted.prefix(3))
                     await MainActor.run { [weak self] in
                         guard let self = self else { return }
+                        self.lastTop3UpdateAt = Date()
+                        let mqttFresh = self.lastMqttTop3UpdateAt.map { Date().timeIntervalSince($0) < 2.5 } ?? false
+                        // Пока MQTT свежий, REST не перетирает top3.
+                        guard !mqttFresh || self.lastTop3DriverOrder.isEmpty else { return }
+                        let newOrder = top3.map(\.driverNumber)
+                        guard !Self.sameTop3(self.lastTop3DriverOrder, newOrder) else { return }
                         let names = self.liveDriverNames
                         let teams = self.liveDriverTeamNames
-                        self.liveMapState.top3LiveDrivers = top3.enumerated().map { idx, p in
-                            (idx + 1, p.driverNumber, names[p.driverNumber] ?? "#\(p.driverNumber)", teams[p.driverNumber] ?? "")
+                        withAnimation(.easeInOut(duration: 0.35)) {
+                            self.liveMapState.top3LiveDrivers = top3.enumerated().map { idx, p in
+                                (idx + 1, p.driverNumber, names[p.driverNumber] ?? "#\(p.driverNumber)", teams[p.driverNumber] ?? "")
+                            }
                         }
+                        self.lastTop3DriverOrder = newOrder
+                        self.lastTop3UpdateAt = Date()
+                    }
+                    pollIdx += 1
+                    if pollIdx % 4 == 0 {
+                        let elapsedMs = Int(Date().timeIntervalSince(startedAt) * 1000)
+                        Self.liveLog("positionsPoll sk=\(sk) rows=\(list.count) uniq=\(byDriver.count) top3=\(top3.count) reqMs=\(elapsedMs)")
                     }
                 }
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                try? await Task.sleep(nanoseconds: 700_000_000)
             }
         }
     }
@@ -920,7 +1009,7 @@ final class SeasonDataLoader: ObservableObject {
         OpenF1LiveMQTTService.shared.onLocation = nil
         OpenF1LiveMQTTService.shared.disconnect()
         Task { await liveLocationBuffer.reset() }
-        liveDotsView?.setPositions([], colors: [])
+        liveDotsView?.setPositions([], colors: [], driverNumbers: [])
         liveDriverColors = [:]
         liveDriverNames = [:]
         liveDriverTeamNames = [:]
@@ -928,6 +1017,10 @@ final class SeasonDataLoader: ObservableObject {
         liveMapState.positionProgressByDriver = [:]
         liveMapState.locations = []
         liveMapState.top3LiveDrivers = []
+        lastTop3DriverOrder = []
+        lastMqttTop3UpdateAt = nil
+        mqttTop3Candidate = []
+        mqttTop3CandidateHits = 0
     }
 
     /// session_key сессии, которая идёт сейчас (now между date_start и date_end), или nil.

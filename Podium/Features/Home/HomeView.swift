@@ -815,6 +815,7 @@ private struct HomeHeroLeftContentView: View {
                             }
                         }
                     }
+                    .animation(.easeInOut(duration: 0.28), value: top3.map { "\($0.driverNumber)-\($0.position)" }.joined(separator: ","))
                 } else {
                     Text("\(liveMapState.locations.count) машин на трассе")
                         .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 12))
@@ -1088,11 +1089,24 @@ private struct HeroCircuitMapWithDotsView: View {
 
 /// Точки на карте: целевые позиции приходят ~40 раз/с, отрисовка 60 FPS с плавной интерполяцией из точки в точку.
 private final class LiveDotsUIView: UIView, LiveDotsViewUpdating {
-    private var targetPositions: [CGPoint] = []
-    private var displayPositions: [CGPoint] = []
+    private struct MotionState {
+        var lastPoint: CGPoint
+        var lastTime: CFTimeInterval
+        var velocity: CGPoint
+    }
+
+    private var targetByDriver: [Int: CGPoint] = [:]
+    private var displayByDriver: [Int: CGPoint] = [:]
+    private var colorByDriver: [Int: UIColor] = [:]
+    private var motionByDriver: [Int: MotionState] = [:]
     private let dotRadius: CGFloat = 5
     private var displayLink: CADisplayLink?
-    private let lerpFactor: CGFloat = 0.75
+    private let lerpFactor: CGFloat = 0.22
+    private let maxStepPerFrame: CGFloat = 3.2
+    /// Лёгкая предикция, чтобы редкие пакеты не выглядели как паузы.
+    private let predictionLead: CGFloat = 0.28
+    private let maxVelocity: CGFloat = 220
+    private let maxPredictionDistance: CGFloat = 20
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -1111,39 +1125,90 @@ private final class LiveDotsUIView: UIView, LiveDotsViewUpdating {
     }
 
     @objc private func tick() {
-        let n = targetPositions.count
-        if n == 0 {
-            if !displayPositions.isEmpty {
-                displayPositions = []
+        let now = CACurrentMediaTime()
+        if targetByDriver.isEmpty {
+            if !displayByDriver.isEmpty {
+                displayByDriver = [:]
                 setNeedsDisplay()
             }
             return
         }
-        if displayPositions.count != n {
-            displayPositions = targetPositions
-            setNeedsDisplay()
-            return
-        }
+
+        // Удаляем ушедших гонщиков без «скачка» индексов.
+        displayByDriver = displayByDriver.filter { targetByDriver[$0.key] != nil }
+
         var changed = false
-        for i in 0..<n {
-            let t = targetPositions[i]
-            let d = displayPositions[i]
-            let dx = (t.x - d.x) * lerpFactor
-            let dy = (t.y - d.y) * lerpFactor
-            if abs(dx) > 0.005 || abs(dy) > 0.005 { changed = true }
-            displayPositions[i].x = d.x + dx
-            displayPositions[i].y = d.y + dy
+        for (num, rawTarget) in targetByDriver {
+            var t = rawTarget
+            if let m = motionByDriver[num] {
+                // Предикция затухает, если входящих апдейтов давно не было.
+                let age = max(0, CGFloat(now - m.lastTime))
+                let lead = max(0, predictionLead - age * 0.12)
+                var px = m.velocity.x * lead
+                var py = m.velocity.y * lead
+                let len = sqrt(px * px + py * py)
+                if len > maxPredictionDistance, len > 0.001 {
+                    let k = maxPredictionDistance / len
+                    px *= k
+                    py *= k
+                }
+                t.x += px
+                t.y += py
+                t.x = min(max(0, t.x), bounds.width)
+                t.y = min(max(0, t.y), bounds.height)
+            }
+            let d = displayByDriver[num] ?? t
+            let dxRaw = (t.x - d.x) * lerpFactor
+            let dyRaw = (t.y - d.y) * lerpFactor
+            let dx = max(-maxStepPerFrame, min(maxStepPerFrame, dxRaw))
+            let dy = max(-maxStepPerFrame, min(maxStepPerFrame, dyRaw))
+            let nx = d.x + dx
+            let ny = d.y + dy
+            if abs(nx - d.x) > 0.01 || abs(ny - d.y) > 0.01 { changed = true }
+            displayByDriver[num] = CGPoint(x: nx, y: ny)
         }
         if changed { setNeedsDisplay() }
     }
 
-    private var dotColors: [UIColor] = []
+    func setPositions(_ positions: [CGPoint], colors: [UIColor], driverNumbers: [Int]) {
+        let now = CACurrentMediaTime()
+        var newTarget: [Int: CGPoint] = [:]
+        var newColors: [Int: UIColor] = [:]
+        for (idx, num) in driverNumbers.enumerated() {
+            guard idx < positions.count else { continue }
+            let p = positions[idx]
+            newTarget[num] = p
+            newColors[num] = idx < colors.count ? colors[idx] : .gray
 
-    func setPositions(_ positions: [CGPoint], colors: [UIColor]) {
-        targetPositions = positions
-        dotColors = colors.count == positions.count ? colors : (0..<positions.count).map { _ in UIColor.gray }
-        if displayPositions.count != positions.count {
-            displayPositions = positions
+            if var m = motionByDriver[num] {
+                let dt = max(0.0001, CGFloat(now - m.lastTime))
+                var vx = (p.x - m.lastPoint.x) / dt
+                var vy = (p.y - m.lastPoint.y) / dt
+                let speed = sqrt(vx * vx + vy * vy)
+                if speed > maxVelocity, speed > 0.001 {
+                    let k = maxVelocity / speed
+                    vx *= k
+                    vy *= k
+                }
+                m.lastPoint = p
+                m.lastTime = now
+                m.velocity = CGPoint(x: vx, y: vy)
+                motionByDriver[num] = m
+            } else {
+                motionByDriver[num] = MotionState(
+                    lastPoint: p,
+                    lastTime: now,
+                    velocity: .zero
+                )
+            }
+        }
+        targetByDriver = newTarget
+        colorByDriver = newColors
+        motionByDriver = motionByDriver.filter { newTarget[$0.key] != nil }
+
+        // Новый гонщик — начинаем сразу с target, чтобы не вылетал из угла.
+        for (num, p) in newTarget where displayByDriver[num] == nil {
+            displayByDriver[num] = p
         }
     }
 
@@ -1152,8 +1217,9 @@ private final class LiveDotsUIView: UIView, LiveDotsViewUpdating {
         let w = bounds.width
         let h = bounds.height
         guard w > 1, h > 1 else { return }
-        for (i, p) in displayPositions.enumerated() {
-            let fillColor = i < dotColors.count ? dotColors[i].cgColor : UIColor.gray.cgColor
+        for num in displayByDriver.keys.sorted() {
+            guard let p = displayByDriver[num] else { continue }
+            let fillColor = (colorByDriver[num] ?? .gray).cgColor
             let r = CGRect(x: p.x - dotRadius, y: p.y - dotRadius, width: dotRadius * 2, height: dotRadius * 2)
             ctx.setFillColor(fillColor)
             ctx.fillEllipse(in: r)
