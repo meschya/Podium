@@ -13,4 +13,5 @@ enum FontWeight: String {
     case titilliumWebLight = "TitilliumWeb-Light"
     case titilliumWebRegular = "TitilliumWeb-Regular"
     case titilliumWebSemiBold = "TitilliumWeb-SemiBold"
+    case northwellAlt = "Northwell-Alt"
 }

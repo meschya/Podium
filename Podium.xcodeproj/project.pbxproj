@@ -49,6 +49,13 @@
 			);
 			target = 963032262F53CE9000C74EF9 /* Podium */;
 		};
+		96D4D3102F75FDE50019FA21 /* Exceptions for "Podium" folder in "PodiumWidget" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				"AppTheme/Font/Northwell-Alt.ttf",
+			);
+			target = F0E0D0C02F55000200C74EF0 /* PodiumWidget */;
+		};
 		F0E0D0C02F55000F00C74EF0 /* Exceptions for "PodiumWidget" folder in "PodiumWidget" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
@@ -63,6 +70,7 @@
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				963032602F53D59800C74EF9 /* Exceptions for "Podium" folder in "Podium" target */,
+				96D4D3102F75FDE50019FA21 /* Exceptions for "Podium" folder in "PodiumWidget" target */,
 			);
 			path = Podium;
 			sourceTree = "<group>";

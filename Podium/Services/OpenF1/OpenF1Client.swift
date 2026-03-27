@@ -429,22 +429,44 @@ final class OpenF1Client {
         if url.absoluteString.contains("location") {
             print("[Live] decode location request, hasToken=\(token != nil)")
         }
-        var (data, response) = try await session.data(for: request)
-        if let http = response as? HTTPURLResponse, http.statusCode == 429 {
-            let seconds = http.value(forHTTPHeaderField: "Retry-After").flatMap { UInt64($0) } ?? 2
-            if url.absoluteString.contains("location") { print("[Live] 429 rate limit, retry after \(seconds)s") }
-            try await Task.sleep(nanoseconds: min(seconds, 10) * 1_000_000_000)
-            (data, response) = try await session.data(for: request)
+
+        let maxAttempts = 8
+        var lastStatus: Int?
+        for attempt in 1...maxAttempts {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                throw OpenF1Error.noData
+            }
+            lastStatus = http.statusCode
+
+            if http.statusCode == 429 || http.statusCode == 503 {
+                if attempt >= maxAttempts {
+                    break
+                }
+                let headerWait = http.value(forHTTPHeaderField: "Retry-After").flatMap { Double($0) }
+                let backoff = headerWait ?? min(pow(2.0, Double(attempt - 1)), 30)
+                let sleepSec = min(max(backoff, 0.5), 30)
+                if url.absoluteString.contains("location") {
+                    print("[Live] \(http.statusCode) retry \(attempt)/\(maxAttempts) after \(sleepSec)s")
+                } else {
+                    print("[OpenF1] \(http.statusCode) on \(url.lastPathComponent) — retry \(attempt)/\(maxAttempts) after \(sleepSec)s")
+                }
+                try await Task.sleep(nanoseconds: UInt64(sleepSec * 1_000_000_000))
+                continue
+            }
+
+            if !(200...299).contains(http.statusCode) {
+                if url.absoluteString.contains("location") { print("[Live] location response status=\(http.statusCode)") }
+                throw OpenF1Error.server(http.statusCode)
+            }
+
+            do {
+                let decoder = JSONDecoder()
+                return try decoder.decode(T.self, from: data)
+            } catch {
+                throw OpenF1Error.decoding(error)
+            }
         }
-        if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-            if url.absoluteString.contains("location") { print("[Live] location response status=\(http.statusCode)") }
-            throw OpenF1Error.server(http.statusCode)
-        }
-        do {
-            let decoder = JSONDecoder()
-            return try decoder.decode(T.self, from: data)
-        } catch {
-            throw OpenF1Error.decoding(error)
-        }
+        throw OpenF1Error.server(lastStatus ?? 429)
     }
 }

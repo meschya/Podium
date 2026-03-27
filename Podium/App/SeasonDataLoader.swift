@@ -96,7 +96,7 @@ final class SeasonDataLoader: ObservableObject {
     /// Календарь сезона из f1api.dev (для таба Seasons — карточки и round совпадают с API).
     @Published var f1apiRacesForSelectedYear: [F1APIRaceInfo] = []
 
-    /// Wins / podiums / poles по сезону из OpenF1 (один проход по этапам — без f1api, без N×пилоты).
+    /// Wins / podiums / poles по сезону из f1api.dev (`/race` + `/qualy` по round).
     @Published var cupTrophyByDriver: [Int: (wins: Int, podiums: Int, poles: Int)] = [:]
     @Published var cupTrophyYear: Int?
     private var cupTrophyComputeTask: Task<Void, Never>?
@@ -227,7 +227,7 @@ final class SeasonDataLoader: ObservableObject {
     func scheduleCupTrophiesForYear(_ year: Int) {
         cupTrophyComputeTask?.cancel()
         cupTrophyComputeTask = Task(priority: .utility) { [weak self] in
-            await self?.computeCupTrophiesFromOpenF1(year: year)
+            await self?.computeCupTrophiesFromF1API(year: year)
         }
     }
 
@@ -324,46 +324,34 @@ final class SeasonDataLoader: ObservableObject {
         }
     }
 
-    private func computeCupTrophiesFromOpenF1(year: Int) async {
-        let client = OpenF1Client.shared
+    /// Wins / podiums / poles — только f1api.dev: `/race` и `/qualy` по round (без OpenF1, без лавины 429).
+    private func computeCupTrophiesFromF1API(year: Int) async {
         guard !Task.isCancelled else { return }
         do {
-            let meetings = try await client.meetings(year: year)
-                .filter { !$0.meetingName.lowercased().contains("test") }
-                .sorted { ($0.parsedDateStart ?? .distantPast) < ($1.parsedDateStart ?? .distantPast) }
-            let allSessions = try await client.sessions(year: year)
-            let byMeeting = Dictionary(grouping: allSessions, by: \.meetingKey)
-            var raceSessionKeyByMeeting: [Int: Int] = [:]
-            var qualSessionKeyByMeeting: [Int: Int] = [:]
-            for (mk, sess) in byMeeting {
-                if let r = OpenF1Session.grandPrixRaceSession(in: sess) {
-                    raceSessionKeyByMeeting[mk] = r.sessionKey
-                }
-                if let q = OpenF1Session.grandPrixQualifyingSession(in: sess) {
-                    qualSessionKeyByMeeting[mk] = q.sessionKey
-                }
-            }
-            let rounds = Array(meetings.prefix(25))
+            let calendar = try await F1APIClient.shared.seasonCalendar(year: year)
+            let races = calendar.sorted { $0.round < $1.round }
+            let rounds = Array(races.prefix(25))
             var totalWins: [Int: Int] = [:]
             var totalPodiums: [Int: Int] = [:]
             var totalPoles: [Int: Int] = [:]
 
-            await withTaskGroup(of: CupRoundTrophyResult.self) { group in
-                for meeting in rounds {
-                    let rk = raceSessionKeyByMeeting[meeting.meetingKey]
-                    let qk = qualSessionKeyByMeeting[meeting.meetingKey]
-                    group.addTask {
-                        await Self.cupTrophiesForOneMeeting(
-                            raceSessionKey: rk,
-                            qualSessionKey: qk,
-                            client: client
-                        )
+            let batchSize = 6
+            SeasonLoaderLog.line("cupTrophies: f1api race+qualy per round, batches of \(batchSize) (\(rounds.count) rounds)")
+            for chunkStart in stride(from: 0, to: rounds.count, by: batchSize) {
+                guard !Task.isCancelled else { return }
+                let end = min(chunkStart + batchSize, rounds.count)
+                let slice = Array(rounds[chunkStart..<end])
+                await withTaskGroup(of: CupRoundTrophyResult.self) { group in
+                    for race in slice {
+                        group.addTask {
+                            await Self.cupRoundTrophiesFromF1API(year: year, round: race.round)
+                        }
                     }
-                }
-                for await delta in group {
-                    Self.mergeTrophyMaps(&totalWins, delta.wins)
-                    Self.mergeTrophyMaps(&totalPodiums, delta.podiums)
-                    Self.mergeTrophyMaps(&totalPoles, delta.poles)
+                    for await delta in group {
+                        Self.mergeTrophyMaps(&totalWins, delta.wins)
+                        Self.mergeTrophyMaps(&totalPodiums, delta.podiums)
+                        Self.mergeTrophyMaps(&totalPoles, delta.poles)
+                    }
                 }
             }
 
@@ -382,39 +370,32 @@ final class SeasonDataLoader: ObservableObject {
         }
     }
 
+    private static func cupRoundTrophiesFromF1API(year: Int, round: Int) async -> CupRoundTrophyResult {
+        async let raceRows = try? await F1APIClient.shared.raceResults(year: year, round: round)
+        async let poleNum = try? await F1APIClient.shared.poleDriverNumber(year: year, round: round)
+        let results = await raceRows
+        let pole = await poleNum
+        var w: [Int: Int] = [:]
+        var p: [Int: Int] = [:]
+        var poles: [Int: Int] = [:]
+        if let results = results {
+            for row in results {
+                if row.position == 1 { w[row.driverNumber, default: 0] += 1 }
+                if row.position <= 3 { p[row.driverNumber, default: 0] += 1 }
+            }
+        }
+        if let n = pole { poles[n, default: 0] += 1 }
+        return CupRoundTrophyResult(wins: w, podiums: p, poles: poles)
+    }
+
     private struct CupRoundTrophyResult: Sendable {
         var wins: [Int: Int]
         var podiums: [Int: Int]
         var poles: [Int: Int]
-        static let empty = CupRoundTrophyResult(wins: [:], podiums: [:], poles: [:])
     }
 
     private static func mergeTrophyMaps(_ acc: inout [Int: Int], _ delta: [Int: Int]) {
         for (k, v) in delta { acc[k, default: 0] += v }
-    }
-
-    private static func cupTrophiesForOneMeeting(
-        raceSessionKey: Int?,
-        qualSessionKey: Int?,
-        client: OpenF1Client
-    ) async -> CupRoundTrophyResult {
-        guard let raceSK = raceSessionKey else { return CupRoundTrophyResult.empty }
-        let order = await client.driverOrderByLatestPositionSnapshot(sessionKey: raceSK)
-        var wins: [Int: Int] = [:]
-        var podiums: [Int: Int] = [:]
-        var poles: [Int: Int] = [:]
-        for (idx, num) in order.enumerated() {
-            let p = idx + 1
-            if p == 1 { wins[num, default: 0] += 1 }
-            if p <= 3 { podiums[num, default: 0] += 1 }
-        }
-        if let qualSK = qualSessionKey {
-            let grid = await client.driverOrderByLatestPositionSnapshot(sessionKey: qualSK)
-            if let first = grid.first {
-                poles[first, default: 0] += 1
-            }
-        }
-        return CupRoundTrophyResult(wins: wins, podiums: podiums, poles: poles)
     }
 
     /// Результаты из f1api по year + round (для карточек из f1api календаря). Ключ для кэша = round.
@@ -533,6 +514,7 @@ final class SeasonDataLoader: ObservableObject {
         }
 
         isLoading = true
+        cupTrophyComputeTask?.cancel()
         SeasonLoaderLog.line("load: start bootstrap task (year=\(Calendar.current.component(.year, from: Date())))")
 
         await Task.detached(priority: .userInitiated) { [weak self] in
@@ -572,21 +554,29 @@ final class SeasonDataLoader: ObservableObject {
                 }
 
                 var loadedCircuits: [Int: CircuitInfo] = [:]
-                let circuitFetchCount = raceMeetings.filter { $0.circuitInfoUrl != nil }.count
-                SeasonLoaderLog.line("load: parallel circuitInfo for \(circuitFetchCount) meetings")
-                await withTaskGroup(of: (Int, CircuitInfo?).self) { group in
-                    for m in raceMeetings {
-                        guard m.circuitInfoUrl != nil else { continue }
-                        let key = m.meetingKey
-                        let meetingUrl = m.circuitInfoUrl
-                        group.addTask {
-                            guard let url = meetingUrl else { return (key, nil) }
-                            let info: CircuitInfo? = try? await client.circuitInfo(urlString: url)
-                            return (key, info.flatMap { $0.x.isEmpty || $0.y.isEmpty ? nil : $0 })
+                let withCircuitUrl = raceMeetings.filter { $0.circuitInfoUrl != nil }
+                let circuitFetchCount = withCircuitUrl.count
+                let batchSize = 4
+                SeasonLoaderLog.line("load: circuitInfo batched (\(batchSize) concurrent) for \(circuitFetchCount) meetings")
+                for chunkStart in stride(from: 0, to: withCircuitUrl.count, by: batchSize) {
+                    let end = min(chunkStart + batchSize, withCircuitUrl.count)
+                    let slice = Array(withCircuitUrl[chunkStart..<end])
+                    await withTaskGroup(of: (Int, CircuitInfo?).self) { group in
+                        for m in slice {
+                            let key = m.meetingKey
+                            let meetingUrl = m.circuitInfoUrl
+                            group.addTask {
+                                guard let url = meetingUrl else { return (key, nil) }
+                                let info: CircuitInfo? = try? await client.circuitInfo(urlString: url)
+                                return (key, info.flatMap { $0.x.isEmpty || $0.y.isEmpty ? nil : $0 })
+                            }
+                        }
+                        for await (key, info) in group {
+                            if let info = info { loadedCircuits[key] = info }
                         }
                     }
-                    for await (key, info) in group {
-                        if let info = info { loadedCircuits[key] = info }
+                    if end < withCircuitUrl.count {
+                        try? await Task.sleep(nanoseconds: 120_000_000)
                     }
                 }
                 await MainActor.run { self.circuitInfoByMeetingKey = loadedCircuits }
@@ -688,9 +678,12 @@ final class SeasonDataLoader: ObservableObject {
                         }
                     }
                 }
-                // Не поднимать `isLoaded` до чемпионатов/команд: иначе сплэш уходит, а таблицы догружаются ещё ~10 с.
-                await MainActor.run { self.isLoaded = true }
-                SeasonLoaderLog.line("load: isLoaded=true (UI may show MainView)")
+                // Трофеи кубка — фоном (OpenF1 `positions` × этапы даёт 429 при параллели и блокирует сплэш на минуты).
+                await MainActor.run {
+                    self.isLoaded = true
+                    self.scheduleCupTrophiesForYear(year)
+                }
+                SeasonLoaderLog.line("load: isLoaded=true; cup trophies scheduled in background")
                 if let nextMeeting = first {
                     SeasonLoaderLog.line("load: refresh nextMeetingSessions meetingKey=\(nextMeeting.meetingKey)")
                     let sessions = (try? await client.sessions(meetingKey: nextMeeting.meetingKey)) ?? []
@@ -703,13 +696,6 @@ final class SeasonDataLoader: ObservableObject {
                 let news = (try? await FIAFeedService.shared.fetchNews()) ?? []
                 await MainActor.run { self.fiaNews = news }
                 SeasonLoaderLog.line("load: news items=\(news.count)")
-                await MainActor.run {
-                    let y = self.selectedSeasonYear
-                    if self.cupTrophyYear != y || self.cupTrophyByDriver.isEmpty {
-                        SeasonLoaderLog.line("load: scheduleCupTrophiesForYear(\(y))")
-                        self.scheduleCupTrophiesForYear(y)
-                    }
-                }
                 SeasonLoaderLog.line("load: bootstrap finished OK")
             } catch {
                 SeasonLoaderLog.line("load: catch — \(error.localizedDescription)")
