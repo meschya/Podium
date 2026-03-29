@@ -1089,24 +1089,13 @@ private struct HeroCircuitMapWithDotsView: View {
 
 /// Точки на карте: целевые позиции приходят ~40 раз/с, отрисовка 60 FPS с плавной интерполяцией из точки в точку.
 private final class LiveDotsUIView: UIView, LiveDotsViewUpdating {
-    private struct MotionState {
-        var lastPoint: CGPoint
-        var lastTime: CFTimeInterval
-        var velocity: CGPoint
-    }
-
     private var targetByDriver: [Int: CGPoint] = [:]
     private var displayByDriver: [Int: CGPoint] = [:]
     private var colorByDriver: [Int: UIColor] = [:]
-    private var motionByDriver: [Int: MotionState] = [:]
     private let dotRadius: CGFloat = 5
     private var displayLink: CADisplayLink?
     private let lerpFactor: CGFloat = 0.22
-    private let maxStepPerFrame: CGFloat = 3.2
-    /// Лёгкая предикция, чтобы редкие пакеты не выглядели как паузы.
-    private let predictionLead: CGFloat = 0.28
-    private let maxVelocity: CGFloat = 220
-    private let maxPredictionDistance: CGFloat = 20
+    private let maxStepPerFrame: CGFloat = 18.0
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -1125,7 +1114,6 @@ private final class LiveDotsUIView: UIView, LiveDotsViewUpdating {
     }
 
     @objc private func tick() {
-        let now = CACurrentMediaTime()
         if targetByDriver.isEmpty {
             if !displayByDriver.isEmpty {
                 displayByDriver = [:]
@@ -1138,25 +1126,7 @@ private final class LiveDotsUIView: UIView, LiveDotsViewUpdating {
         displayByDriver = displayByDriver.filter { targetByDriver[$0.key] != nil }
 
         var changed = false
-        for (num, rawTarget) in targetByDriver {
-            var t = rawTarget
-            if let m = motionByDriver[num] {
-                // Предикция затухает, если входящих апдейтов давно не было.
-                let age = max(0, CGFloat(now - m.lastTime))
-                let lead = max(0, predictionLead - age * 0.12)
-                var px = m.velocity.x * lead
-                var py = m.velocity.y * lead
-                let len = sqrt(px * px + py * py)
-                if len > maxPredictionDistance, len > 0.001 {
-                    let k = maxPredictionDistance / len
-                    px *= k
-                    py *= k
-                }
-                t.x += px
-                t.y += py
-                t.x = min(max(0, t.x), bounds.width)
-                t.y = min(max(0, t.y), bounds.height)
-            }
+        for (num, t) in targetByDriver {
             let d = displayByDriver[num] ?? t
             let dxRaw = (t.x - d.x) * lerpFactor
             let dyRaw = (t.y - d.y) * lerpFactor
@@ -1171,7 +1141,6 @@ private final class LiveDotsUIView: UIView, LiveDotsViewUpdating {
     }
 
     func setPositions(_ positions: [CGPoint], colors: [UIColor], driverNumbers: [Int]) {
-        let now = CACurrentMediaTime()
         var newTarget: [Int: CGPoint] = [:]
         var newColors: [Int: UIColor] = [:]
         for (idx, num) in driverNumbers.enumerated() {
@@ -1179,32 +1148,9 @@ private final class LiveDotsUIView: UIView, LiveDotsViewUpdating {
             let p = positions[idx]
             newTarget[num] = p
             newColors[num] = idx < colors.count ? colors[idx] : .gray
-
-            if var m = motionByDriver[num] {
-                let dt = max(0.0001, CGFloat(now - m.lastTime))
-                var vx = (p.x - m.lastPoint.x) / dt
-                var vy = (p.y - m.lastPoint.y) / dt
-                let speed = sqrt(vx * vx + vy * vy)
-                if speed > maxVelocity, speed > 0.001 {
-                    let k = maxVelocity / speed
-                    vx *= k
-                    vy *= k
-                }
-                m.lastPoint = p
-                m.lastTime = now
-                m.velocity = CGPoint(x: vx, y: vy)
-                motionByDriver[num] = m
-            } else {
-                motionByDriver[num] = MotionState(
-                    lastPoint: p,
-                    lastTime: now,
-                    velocity: .zero
-                )
-            }
         }
         targetByDriver = newTarget
         colorByDriver = newColors
-        motionByDriver = motionByDriver.filter { newTarget[$0.key] != nil }
 
         // Новый гонщик — начинаем сразу с target, чтобы не вылетал из угла.
         for (num, p) in newTarget where displayByDriver[num] == nil {

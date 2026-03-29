@@ -147,13 +147,24 @@ final class OpenF1Client {
 
     /// Позиции машин на трассе. Для real-time нужна подписка OpenF1 + MQTT (wss://mqtt.openf1.org:8084/mqtt, topic v1/location).
     /// REST при частом опросе даёт 429 — опрашивать не чаще ~1–2 раз в секунду.
-    func location(sessionKey: Int) async throws -> [OpenF1Location] {
+    /// По документации OpenF1 к `/location` обычно добавляют фильтр `date>` / `date<`; без окна по времени API может ответить **422**.
+    /// - Parameters:
+    ///   - since: нижняя граница по `date` (query `date>`).
+    ///   - until: верхняя граница по `date` (query `date<`), по умолчанию «сейчас» если задан `since`.
+    func location(sessionKey: Int, since: Date? = nil, until: Date? = nil) async throws -> [OpenF1Location] {
         let key = sessionKey == -1 ? "latest" : "\(sessionKey)"
-        guard let url = URL(string: "\(baseURL)/location?session_key=\(key)") else { throw OpenF1Error.invalidURL }
-        print("[Live] REST GET \(url.absoluteString)")
-        let result = try await decode([OpenF1Location].self, url: url)
-        print("[Live] REST location -> \(result.count) items")
-        return result
+        var components = URLComponents(string: "\(baseURL)/location")!
+        var items: [URLQueryItem] = [URLQueryItem(name: "session_key", value: key)]
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let since = since {
+            items.append(URLQueryItem(name: "date>", value: f.string(from: since)))
+            let end = until ?? Date()
+            items.append(URLQueryItem(name: "date<", value: f.string(from: end)))
+        }
+        components.queryItems = items
+        guard let url = components.url else { throw OpenF1Error.invalidURL }
+        return try await decode([OpenF1Location].self, url: url)
     }
 
     func laps(sessionKey: Int) async throws -> [OpenF1Lap] {
@@ -426,11 +437,9 @@ final class OpenF1Client {
         if let token = token {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
-        if url.absoluteString.contains("location") {
-            print("[Live] decode location request, hasToken=\(token != nil)")
-        }
-
-        let maxAttempts = 8
+        let isLocationAPI = url.absoluteString.contains("/location")
+        // Лайв `/location` нельзя блокировать на 30 с из‑за Retry-After — иначе карта «замирает» на секунды.
+        let maxAttempts = isLocationAPI ? 2 : 8
         var lastStatus: Int?
         for attempt in 1...maxAttempts {
             let (data, response) = try await session.data(for: request)
@@ -445,9 +454,12 @@ final class OpenF1Client {
                 }
                 let headerWait = http.value(forHTTPHeaderField: "Retry-After").flatMap { Double($0) }
                 let backoff = headerWait ?? min(pow(2.0, Double(attempt - 1)), 30)
-                let sleepSec = min(max(backoff, 0.5), 30)
-                if url.absoluteString.contains("location") {
-                    print("[Live] \(http.statusCode) retry \(attempt)/\(maxAttempts) after \(sleepSec)s")
+                var sleepSec = min(max(backoff, 0.5), 30)
+                if isLocationAPI {
+                    sleepSec = min(sleepSec, 2.5)
+                }
+                if isLocationAPI {
+                    print("[Live] \(http.statusCode) retry \(attempt)/\(maxAttempts) after \(sleepSec)s (location cap)")
                 } else {
                     print("[OpenF1] \(http.statusCode) on \(url.lastPathComponent) — retry \(attempt)/\(maxAttempts) after \(sleepSec)s")
                 }
@@ -456,7 +468,6 @@ final class OpenF1Client {
             }
 
             if !(200...299).contains(http.statusCode) {
-                if url.absoluteString.contains("location") { print("[Live] location response status=\(http.statusCode)") }
                 throw OpenF1Error.server(http.statusCode)
             }
 
