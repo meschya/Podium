@@ -82,13 +82,16 @@ struct HomeView: View {
             }
             .task {
                 while !Task.isCancelled {
-                    let (meeting, heroVisible) = await MainActor.run {
-                        (loader.meeting, loader.isHeroSectionVisible)
-                    }
-                    if meeting != nil && heroVisible {
-                        loader.startLiveStreamIfNeeded()
-                    } else {
-                        loader.stopLiveStream()
+                    await MainActor.run {
+                        let meeting = loader.meeting
+                        let heroVisible = loader.isHeroSectionVisible
+                        let sessionLive = loader.currentLiveSessionKey() != nil
+                        let shouldRun = meeting != nil && heroVisible && sessionLive
+                        if shouldRun {
+                            loader.startLiveStreamIfNeeded()
+                        } else if loader.liveStreamStarted {
+                            loader.stopLiveStream()
+                        }
                     }
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                 }

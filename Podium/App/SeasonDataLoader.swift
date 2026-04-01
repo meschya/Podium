@@ -137,7 +137,8 @@ final class SeasonDataLoader: ObservableObject {
     /// Буфер MQTT в акторе — не грузим main thread каждым сообщением.
     private let liveLocationBuffer = LiveLocationBuffer()
     private var lastLiveStreamSessionKey: Int?
-    private var liveStreamStarted = false
+    /// Внешний UI (Home) может проверить, не вызывать `stopLiveStream` каждый тик без необходимости.
+    private(set) var liveStreamStarted = false
     /// Таск: раз в 1 с снэпшот → считаем точки → обновляем только UIKit, без SwiftUI.
     private var liveFlushTask: Task<Void, Never>?
     /// Опрос позиций в гонке для топ‑3 лидеров (REST OpenF1).
@@ -630,7 +631,11 @@ final class SeasonDataLoader: ObservableObject {
                         if let info = info { self.circuitInfo = info }
                         self.nextMeetingSessions = nextSessions.sorted { ($0.dateStart ?? "") < ($1.dateStart ?? "") }
                         self.syncUpcomingRaceWidget()
-                        self.startLiveStreamIfNeeded()
+                        if self.currentLiveSessionKey() != nil {
+                            self.startLiveStreamIfNeeded()
+                        } else {
+                            self.stopLiveStream()
+                        }
                     }
                 }
 
@@ -771,6 +776,11 @@ final class SeasonDataLoader: ObservableObject {
                     await MainActor.run {
                         self.nextMeetingSessions = sessions.sorted { ($0.dateStart ?? "") < ($1.dateStart ?? "") }
                         self.syncUpcomingRaceWidget()
+                        if self.currentLiveSessionKey() != nil {
+                            self.startLiveStreamIfNeeded()
+                        } else {
+                            self.stopLiveStream()
+                        }
                     }
                 }
                 SeasonLoaderLog.line("load: FIA fetchNews")
@@ -795,18 +805,13 @@ final class SeasonDataLoader: ObservableObject {
         return names.enumerated().map { (position: $0.offset + 1, name: $0.element, points: 0) }
     }
 
-    /// Лайв только OpenF1 MQTT. MQTT пишет в актор (не main), UI обновляется по таймеру — без лагов.
+    /// Лайв только OpenF1 MQTT. Стартует **только** если по расписанию OpenF1 сейчас идёт одна из сессий `nextMeetingSessions` (иначе 429 на `positions`/`location` и шум в логах).
     func startLiveStreamIfNeeded() {
+        guard let current = currentLiveSessionKey() else { return }
         guard !liveStreamStarted else { return }
         liveStreamStarted = true
-        let sessionKeyToUse: Int?
-        if let current = currentLiveSessionKey() {
-            lastLiveStreamSessionKey = current
-            sessionKeyToUse = current
-            print("[Live] MQTT session=\(current)")
-        } else {
-            sessionKeyToUse = nil
-        }
+        lastLiveStreamSessionKey = current
+        print("[Live] MQTT session=\(current)")
 
         // Принимаем все сообщения MQTT — не фильтруем по session_key, чтобы лайв всегда показывал данные.
         OpenF1LiveMQTTService.shared.onLocation = { [weak self] loc in
@@ -814,14 +819,11 @@ final class SeasonDataLoader: ObservableObject {
             Task { await self.liveLocationBuffer.add(loc) }
         }
         Task { await OpenF1LiveMQTTService.shared.connect() }
-        let skForColors = sessionKeyToUse ?? nextMeetingSessions.first?.sessionKey
-        if let sk = skForColors {
-            Task { await loadLiveDriverColors(sessionKey: sk) }
-        }
+        Task { await loadLiveDriverColors(sessionKey: current) }
 
         // Топ‑3 лидеров — из API позиций (реальный порядок в гонке), не по прогрессу на трассе.
-        startLivePositionsPoll(sessionKey: sessionKeyToUse ?? skForColors)
-        startLiveLocationRestPoll(sessionKey: sessionKeyToUse ?? skForColors)
+        startLivePositionsPoll()
+        startLiveLocationRestPoll()
 
         // Снэпшот locations ~60×/с (без objectWillChange на SeasonDataLoader — иначе лагает весь Home).
         var cachedInfo: CircuitInfo?
@@ -1064,22 +1066,20 @@ final class SeasonDataLoader: ObservableObject {
 
     /// Подмешивать координаты из REST: узкое окно по времени, **один** запрос за тик (два подряд давали 429 и блок на Retry-After).
     /// У OpenF1 `/location` без `date>`/`date<` часто **422**; частота ~1×/2.5 с чтобы не упираться в rate limit.
-    private func startLiveLocationRestPoll(sessionKey initialSk: Int?) {
+    private func startLiveLocationRestPoll() {
         liveLocationRestPollTask?.cancel()
         liveLocationRestPollTask = Task.detached(priority: .utility) { [weak self] in
             guard let self = self else { return }
             var tick = 0
             let windowSec: TimeInterval = 6
             while !Task.isCancelled {
-                let skHint = await MainActor.run {
-                    self.currentLiveSessionKey() ?? self.lastLiveStreamSessionKey ?? self.nextMeetingSessions.first?.sessionKey ?? initialSk
-                }
+                let skHint = await MainActor.run { self.currentLiveSessionKey() }
                 let since = Date().addingTimeInterval(-windowSec)
                 let locs: [OpenF1Location]?
                 if let sk = skHint {
                     locs = try? await OpenF1Client.shared.location(sessionKey: sk, since: since)
                 } else {
-                    locs = try? await OpenF1Client.shared.location(sessionKey: -1, since: since)
+                    locs = nil
                 }
                 if let locs = locs, !locs.isEmpty {
                     await self.liveLocationBuffer.merge(locs)
@@ -1094,15 +1094,13 @@ final class SeasonDataLoader: ObservableObject {
     }
 
     /// Топ‑3 лидеров из API позиций (реальный порядок в гонке). Опрос раз в ~0.7 с.
-    private func startLivePositionsPoll(sessionKey initialSk: Int?) {
+    private func startLivePositionsPoll() {
         livePositionsPollTask?.cancel()
         livePositionsPollTask = Task.detached(priority: .utility) { [weak self] in
             guard let self = self else { return }
             var pollIdx = 0
             while !Task.isCancelled {
-                let sk = await MainActor.run {
-                    self.currentLiveSessionKey() ?? self.lastLiveStreamSessionKey ?? self.nextMeetingSessions.first?.sessionKey ?? initialSk
-                }
+                let sk = await MainActor.run { self.currentLiveSessionKey() }
                 if let sk = sk {
                     let startedAt = Date()
                     let list = (try? await OpenF1Client.shared.positions(sessionKey: sk)) ?? []

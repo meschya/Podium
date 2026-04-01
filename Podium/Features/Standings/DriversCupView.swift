@@ -761,10 +761,7 @@ private struct DriverCupDetailView: View {
         .toolbarColorScheme(.dark, for: .navigationBar)
         .tint(.white)
         .task(id: "\(driverNumber)-\(loader.selectedSeasonYear)") {
-            await withTaskGroup(of: Void.self) { group in
-                group.addTask { await loadSeasonDetailData() }
-                group.addTask { await loadSeasonStatsData() }
-            }
+            await loadDriverSeasonFromJolpica()
         }
     }
 
@@ -787,123 +784,17 @@ private struct DriverCupDetailView: View {
         Int((standingRow?.points ?? 0).rounded())
     }
 
-    private func loadSeasonStatsData() async {
+    /// Jolpica: календарь + список пилотов + все ГП и спринты гонщика (api.jolpi.ca). Спринт-поул: `grid == 1` в SprintResults.
+    private func loadDriverSeasonFromJolpica() async {
         let year = loader.selectedSeasonYear
-        await MainActor.run { summaryStats = .zero }
-        do {
-            let calendar = try await F1APIClient.shared.seasonCalendar(year: year)
-            let races = calendar.sorted { $0.round < $1.round }
-            let now = Date()
-            let dayFormatter: DateFormatter = {
-                let f = DateFormatter()
-                f.dateFormat = "yyyy-MM-dd"
-                f.locale = Locale(identifier: "en_US_POSIX")
-                f.timeZone = TimeZone(identifier: "UTC")
-                return f
-            }()
-
-            var gpRaces = 0
-            var gpPoints = 0
-            var gpWins = 0
-            var gpPodiums = 0
-            var gpPoles = 0
-            var gpTop10s = 0
-            var gpDnfs = 0
-            var sprintRaces = 0
-            var sprintPoints = 0
-            var sprintWins = 0
-            var sprintPodiums = 0
-            var sprintPoles = 0
-            var sprintTop10s = 0
-
-            for race in races.prefix(25) {
-                if Task.isCancelled { return }
-                if let dateStr = race.schedule?.race?.date, dateStr.count >= 10,
-                   let d = dayFormatter.date(from: String(dateStr.prefix(10))), d > now {
-                    continue
-                }
-
-                let results = try? await F1APIClient.shared.raceResults(year: year, round: race.round)
-                if let row = resolvedRaceRow(results: results ?? []) {
-                    gpRaces += 1
-                    gpPoints += row.points
-                    if row.position == 1 { gpWins += 1 }
-                    if (1...3).contains(row.position) { gpPodiums += 1 }
-                    if (1...10).contains(row.position) { gpTop10s += 1 }
-                    if isDnfTime(row.time) { gpDnfs += 1 }
-                }
-
-                if let pole = try? await F1APIClient.shared.poleDriverNumber(year: year, round: race.round),
-                   pole == driverNumber {
-                    gpPoles += 1
-                }
-
-                let sprintRows = await F1APIClient.shared.sprintRaceResults(year: year, round: race.round)
-                if let sprintRow = resolvedSprintRow(rows: sprintRows) {
-                    sprintRaces += 1
-                    sprintPoints += sprintRow.points
-                    if sprintRow.position == 1 { sprintWins += 1 }
-                    if (1...3).contains(sprintRow.position) { sprintPodiums += 1 }
-                    if (1...10).contains(sprintRow.position) { sprintTop10s += 1 }
-                }
-
-                if let sprintPole = await F1APIClient.shared.sprintPoleDriverNumber(year: year, round: race.round),
-                   sprintPole == driverNumber {
-                    sprintPoles += 1
-                }
-            }
-
-            await MainActor.run {
-                summaryStats = DriverCupSummaryStats(
-                    gpRaces: gpRaces,
-                    gpPoints: gpPoints,
-                    gpWins: gpWins,
-                    gpPodiums: gpPodiums,
-                    gpPoles: gpPoles,
-                    gpTop10s: gpTop10s,
-                    gpDnfs: gpDnfs,
-                    sprintRaces: sprintRaces,
-                    sprintPoints: sprintPoints,
-                    sprintWins: sprintWins,
-                    sprintPodiums: sprintPodiums,
-                    sprintPoles: sprintPoles,
-                    sprintTop10s: sprintTop10s
-                )
-            }
-        } catch {
-            if Task.isCancelled { return }
-            await MainActor.run { summaryStats = .zero }
-        }
-    }
-
-    private func resolvedRaceRow(results: [RaceResultRow]) -> RaceResultRow? {
-        if let byNum = results.first(where: { $0.driverNumber == driverNumber }) { return byNum }
-        let key = Self.normalizedDriverNameKey(fullName)
-        return results.first(where: { Self.normalizedDriverNameKey($0.driverName) == key })
-    }
-
-    private func resolvedSprintRow(rows: [F1APISprintRow]) -> F1APISprintRow? {
-        if let byNum = rows.first(where: { $0.driver.number == driverNumber }) { return byNum }
-        let key = Self.normalizedDriverNameKey(fullName)
-        return rows.first(where: { Self.normalizedDriverNameKey("\($0.driver.name) \($0.driver.surname)") == key })
-    }
-
-    private func isDnfTime(_ time: String) -> Bool {
-        let t = time.lowercased()
-        return t.contains("dnf") || t.contains("ret") || t.contains("dns") || t.contains("dsq")
-    }
-
-    /// Очки за этап по столбцам: f1api `.../race` (ГП) + при наличии `.../sprint/race` (спринт). Только ГП занижает столбцы на спринтовых уик-эндах.
-    private func loadSeasonDetailData() async {
-        let year = loader.selectedSeasonYear
-        var newValues = Array(repeating: 0.0, count: 25)
-        var gpValues = Array(repeating: 0.0, count: 25)
-        var sprintValues = Array(repeating: 0.0, count: 25)
+        let num = driverNumber
+        let fname = fullName
 
         await MainActor.run {
-            chartPointsByRound = newValues
-            chartGpPointsByRound = gpValues
-            chartSprintPointsByRound = sprintValues
+            summaryStats = .zero
+            chartPointsByRound = Array(repeating: 0, count: 25)
+            chartGpPointsByRound = Array(repeating: 0, count: 25)
+            chartSprintPointsByRound = Array(repeating: 0, count: 25)
         }
 
         let dayFormatter: DateFormatter = {
@@ -916,45 +807,110 @@ private struct DriverCupDetailView: View {
         let now = Date()
 
         do {
-            let calendar = try await F1APIClient.shared.seasonCalendar(year: year)
-            let races = calendar.sorted { $0.round < $1.round }
-            guard !Task.isCancelled else { return }
+            async let scheduleTask = JolpicaF1Client.shared.seasonRaces(year: year)
+            async let driversTask = JolpicaF1Client.shared.drivers(year: year)
+            let schedule = try await scheduleTask
+            let drivers = try await driversTask
+            if Task.isCancelled { return }
 
-            for (index, race) in races.prefix(25).enumerated() {
-                if Task.isCancelled { return }
-                if let dateStr = race.schedule?.race?.date, dateStr.count >= 10,
-                   let d = dayFormatter.date(from: String(dateStr.prefix(10))), d > now {
-                    newValues[index] = 0
-                    gpValues[index] = 0
-                    sprintValues[index] = 0
-                    continue
-                }
-                async let gpResults = try? await F1APIClient.shared.raceResults(year: year, round: race.round)
-                async let sprintMap = F1APIClient.shared.sprintPointsByDriverNumber(year: year, round: race.round)
-                let results = await gpResults
-                let sprintByNumber = await sprintMap
-                guard let results, !results.isEmpty else {
-                    newValues[index] = 0
-                    gpValues[index] = 0
-                    sprintValues[index] = 0
-                    continue
-                }
-                let resolvedNum = Self.resolvedDriverNumber(in: results, driverNumber: driverNumber, fullName: fullName)
-                let gp = Self.pointsInRaceResults(results, driverNumber: driverNumber, fullName: fullName)
-                let sp = sprintByNumber[resolvedNum] ?? 0
-                gpValues[index] = Double(gp)
-                sprintValues[index] = Double(sp)
-                newValues[index] = Double(gp + sp)
+            guard let driverId = JolpicaF1Client.resolveDriverId(drivers: drivers, driverNumber: num, fullName: fname) else {
+                return
             }
+
+            async let gpTask = JolpicaF1Client.shared.driverGpRaces(year: year, driverId: driverId)
+            async let spTask = JolpicaF1Client.shared.driverSprintRaces(year: year, driverId: driverId)
+            let gpRaces = try await gpTask
+            let spRaces = try await spTask
+            if Task.isCancelled { return }
+
+            var gpByRound: [Int: JolpicaGpResultRow] = [:]
+            gpByRound.reserveCapacity(gpRaces.count)
+            for r in gpRaces {
+                if let row = r.Results.first { gpByRound[r.roundInt] = row }
+            }
+
+            var sprintByRound: [Int: JolpicaSprintResultRow] = [:]
+            sprintByRound.reserveCapacity(spRaces.count)
+            for r in spRaces {
+                if let row = r.SprintResults.first { sprintByRound[r.roundInt] = row }
+            }
+
+            let races = Array(schedule.prefix(25))
+            var newValues = Array(repeating: 0.0, count: 25)
+            var gpVals = Array(repeating: 0.0, count: 25)
+            var spVals = Array(repeating: 0.0, count: 25)
+
+            var gpRacesCount = 0
+            var gpPoints = 0
+            var gpWins = 0
+            var gpPodiums = 0
+            var gpPoles = 0
+            var gpTop10s = 0
+            var gpDnfs = 0
+            var sprintRacesCount = 0
+            var sprintPoints = 0
+            var sprintWins = 0
+            var sprintPodiums = 0
+            var sprintPoles = 0
+            var sprintTop10s = 0
+
+            for (index, race) in races.enumerated() {
+                if Task.isCancelled { return }
+                if race.date.count >= 10,
+                   let d = dayFormatter.date(from: String(race.date.prefix(10))), d > now {
+                    continue
+                }
+
+                if let gp = gpByRound[race.roundInt] {
+                    gpRacesCount += 1
+                    gpPoints += gp.pointsInt
+                    if gp.positionInt == 1 { gpWins += 1 }
+                    if (1...3).contains(gp.positionInt) { gpPodiums += 1 }
+                    if (1...10).contains(gp.positionInt) { gpTop10s += 1 }
+                    if Self.isDnfGpStatus(gp.status, time: gp.Time?.time) { gpDnfs += 1 }
+                    if gp.gridInt == 1 { gpPoles += 1 }
+                    gpVals[index] = Double(gp.pointsInt)
+                }
+
+                if let sp = sprintByRound[race.roundInt] {
+                    sprintRacesCount += 1
+                    sprintPoints += sp.pointsInt
+                    if sp.positionInt == 1 { sprintWins += 1 }
+                    if (1...3).contains(sp.positionInt) { sprintPodiums += 1 }
+                    if (1...10).contains(sp.positionInt) { sprintTop10s += 1 }
+                    if sp.gridInt == 1 { sprintPoles += 1 }
+                    spVals[index] = Double(sp.pointsInt)
+                }
+
+                newValues[index] = gpVals[index] + spVals[index]
+            }
+
+            if Task.isCancelled { return }
 
             await MainActor.run {
                 chartPointsByRound = newValues
-                chartGpPointsByRound = gpValues
-                chartSprintPointsByRound = sprintValues
+                chartGpPointsByRound = gpVals
+                chartSprintPointsByRound = spVals
+                summaryStats = DriverCupSummaryStats(
+                    gpRaces: gpRacesCount,
+                    gpPoints: gpPoints,
+                    gpWins: gpWins,
+                    gpPodiums: gpPodiums,
+                    gpPoles: gpPoles,
+                    gpTop10s: gpTop10s,
+                    gpDnfs: gpDnfs,
+                    sprintRaces: sprintRacesCount,
+                    sprintPoints: sprintPoints,
+                    sprintWins: sprintWins,
+                    sprintPodiums: sprintPodiums,
+                    sprintPoles: sprintPoles,
+                    sprintTop10s: sprintTop10s
+                )
             }
         } catch {
             if Task.isCancelled { return }
             await MainActor.run {
+                summaryStats = .zero
                 chartPointsByRound = Array(repeating: 0, count: 25)
                 chartGpPointsByRound = Array(repeating: 0, count: 25)
                 chartSprintPointsByRound = Array(repeating: 0, count: 25)
@@ -962,24 +918,14 @@ private struct DriverCupDetailView: View {
         }
     }
 
-    /// Номер в таблице и в f1api обычно совпадает; при подмене пилота — fallback по имени.
-    private static func pointsInRaceResults(_ results: [RaceResultRow], driverNumber: Int, fullName: String) -> Int {
-        if let row = results.first(where: { $0.driverNumber == driverNumber }) {
-            return row.points
-        }
-        let key = normalizedDriverNameKey(fullName)
-        if let row = results.first(where: { normalizedDriverNameKey($0.driverName) == key }) {
-            return row.points
-        }
-        return 0
-    }
-
-    /// Номер из строки ГП того же уик-энда (важно при подмене: в зачёте и в API может отличаться источник).
-    private static func resolvedDriverNumber(in results: [RaceResultRow], driverNumber: Int, fullName: String) -> Int {
-        if let r = results.first(where: { $0.driverNumber == driverNumber }) { return r.driverNumber }
-        let key = normalizedDriverNameKey(fullName)
-        if let r = results.first(where: { normalizedDriverNameKey($0.driverName) == key }) { return r.driverNumber }
-        return driverNumber
+    private static func isDnfGpStatus(_ status: String, time: String?) -> Bool {
+        let s = status.lowercased()
+        if s == "finished" { return false }
+        if s.contains("disqualif") { return true }
+        if s.contains("retir") { return true }
+        if s.contains("dns") || s.contains("dnf") { return true }
+        let t = (time ?? "").lowercased()
+        return t.contains("dnf") || t.contains("ret") || t.contains("dns") || t.contains("dsq")
     }
 
     private static func normalizedDriverNameKey(_ name: String) -> String {
