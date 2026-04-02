@@ -374,6 +374,10 @@ private final class TimelineSessionUIKitContainer: UIView {
 private final class TimelineUIKitBlockView: UIView {
     private let titleLabel = UILabel()
     private let timeLabel = UILabel()
+    private let tailSpacer = UIView()
+    private let stack = UIStackView()
+    private var lastItem: SessionItem?
+    private var lastTimeString = ""
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -383,40 +387,120 @@ private final class TimelineUIKitBlockView: UIView {
         layer.borderColor = UIColor.white.withAlphaComponent(0.3).cgColor
         layer.borderWidth = 1
 
-        titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        timeLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.textColor = .white
         timeLabel.textColor = .secondaryLabel
-        titleLabel.font = UIFont(name: FontWeight.titilliumWebSemiBold.rawValue, size: 13)
-            ?? .systemFont(ofSize: 13, weight: .semibold)
-        timeLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         titleLabel.numberOfLines = 2
-        timeLabel.numberOfLines = 2
-        titleLabel.adjustsFontSizeToFitWidth = true
-        titleLabel.minimumScaleFactor = 0.85
-        timeLabel.adjustsFontSizeToFitWidth = true
-        timeLabel.minimumScaleFactor = 0.8
+        timeLabel.numberOfLines = 1
+        titleLabel.lineBreakMode = .byTruncatingTail
+        timeLabel.lineBreakMode = .byClipping
 
-        addSubview(titleLabel)
-        addSubview(timeLabel)
+        tailSpacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        tailSpacer.setContentCompressionResistancePriority(.init(1), for: .horizontal)
+
+        stack.axis = .vertical
+        stack.alignment = .fill
+        stack.spacing = 2
+        stack.distribution = .fill
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.addArrangedSubview(titleLabel)
+        stack.addArrangedSubview(timeLabel)
+        stack.addArrangedSubview(tailSpacer)
+
+        addSubview(stack)
         NSLayoutConstraint.activate([
-            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 6),
-            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-            timeLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
-            timeLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-            timeLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            stack.topAnchor.constraint(equalTo: topAnchor, constant: 4),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -4),
         ])
     }
 
     required init?(coder: NSCoder) { nil }
 
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        applyCompactLayoutIfNeeded()
+    }
+
     func configure(item: SessionItem, timeZone: TimeZone) {
+        lastItem = item
         titleLabel.text = item.short
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
         f.timeZone = timeZone
         f.dateFormat = "HH:mm"
-        timeLabel.text = "\(f.string(from: item.start)) – \(f.string(from: item.end))"
+        lastTimeString = "\(f.string(from: item.start))–\(f.string(from: item.end))"
+        timeLabel.text = lastTimeString
+        timeLabel.textColor = .secondaryLabel
+        setNeedsLayout()
+        applyCompactLayoutIfNeeded()
+    }
+
+    /// Нормальный блок: название сверху, время снизу (`secondaryLabel`). Если высоты мало — одна строка «название · время» слева (время не у trailing).
+    private func applyCompactLayoutIfNeeded() {
+        let h = bounds.height
+        guard h > 0, lastItem != nil else { return }
+
+        let tit = UIFont(name: FontWeight.titilliumWebSemiBold.rawValue, size: 13)
+            ?? .systemFont(ofSize: 13, weight: .semibold)
+        let titSmall = UIFont(name: FontWeight.titilliumWebSemiBold.rawValue, size: 11)
+            ?? .systemFont(ofSize: 11, weight: .semibold)
+        let timeNormal = UIFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+        let timeSmall = UIFont.monospacedDigitSystemFont(ofSize: 9, weight: .medium)
+
+        titleLabel.isHidden = false
+        timeLabel.isHidden = false
+        timeLabel.text = lastTimeString
+        timeLabel.textColor = .secondaryLabel
+
+        /// Ниже ~этого две строки (заголовок + время) визуально не помещаются — склеиваем в одну слева.
+        let compactHeightThreshold: CGFloat = 38
+
+        if h >= compactHeightThreshold {
+            stack.axis = .vertical
+            stack.alignment = .fill
+            stack.spacing = 2
+            tailSpacer.isHidden = true
+
+            titleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            titleLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+            timeLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            timeLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+            titleLabel.font = tit
+            titleLabel.numberOfLines = 2
+            timeLabel.font = timeNormal
+            titleLabel.adjustsFontSizeToFitWidth = true
+            titleLabel.minimumScaleFactor = 0.85
+            timeLabel.adjustsFontSizeToFitWidth = true
+            timeLabel.minimumScaleFactor = 0.75
+        } else {
+            stack.axis = .horizontal
+            stack.alignment = .center
+            stack.spacing = 6
+            tailSpacer.isHidden = false
+
+            titleLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+            titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            timeLabel.setContentHuggingPriority(.required, for: .horizontal)
+            timeLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+            titleLabel.numberOfLines = 1
+            timeLabel.numberOfLines = 1
+
+            if h < 22 {
+                titleLabel.font = titSmall
+                timeLabel.font = timeSmall
+                titleLabel.minimumScaleFactor = 0.7
+                timeLabel.minimumScaleFactor = 0.65
+            } else {
+                titleLabel.font = titSmall
+                timeLabel.font = timeSmall
+                titleLabel.minimumScaleFactor = 0.75
+                timeLabel.minimumScaleFactor = 0.7
+            }
+            titleLabel.adjustsFontSizeToFitWidth = true
+            timeLabel.adjustsFontSizeToFitWidth = true
+        }
     }
 }
