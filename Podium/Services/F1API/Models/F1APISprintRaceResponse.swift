@@ -1,6 +1,6 @@
 //
 //  F1APISprintRaceResponse.swift
-//  Podium — GET https://f1api.dev/api/{year}/{round}/sprint/race
+//  Podium — спринт маппится из Jolpica `/{year}/{round}/sprint.json`
 //
 
 import Foundation
@@ -33,5 +33,11 @@ struct F1APISprintRow: Decodable {
         if let i = try? c.decode(Int.self, forKey: key) { return i }
         if let s = try? c.decode(String.self, forKey: key), let i = Int(s) { return i }
         return 0
+    }
+
+    init(position: Int, points: Int, driver: F1APIDriver) {
+        self.position = position
+        self.points = points
+        self.driver = driver
     }
 }

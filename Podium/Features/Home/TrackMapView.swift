@@ -41,71 +41,98 @@ struct TrackMapView: View {
 
     @ViewBuilder
     private func compactContentView(in size: CGSize) -> some View {
-        if let name = localTrackImageName {
+        let pathPoints = circuitInfo?.normalizedPathPoints() ?? []
+        if pathPoints.count >= 2 {
+            CircuitPathShape(points: pathPoints)
+                .stroke(strokeColor, lineWidth: compact ? 2.5 : 3)
+        } else if let name = localTrackImageName {
             Image(name)
                 .resizable()
+                .interpolation(.high)
+                .antialiased(true)
                 .renderingMode(.template)
                 .foregroundStyle(strokeColor)
                 .scaledToFit()
                 .frame(width: size.width, height: size.height)
-        } else {
-            let pathPoints = circuitInfo?.normalizedPathPoints() ?? []
-            if pathPoints.count >= 2 {
-                CircuitPathShape(points: pathPoints)
-                    .stroke(strokeColor, lineWidth: 3)
-            } else if let urlString = imageURL, let url = URL(string: urlString) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFit()
-                    case .failure:
-                        trackPlaceholder
-                    case .empty:
-                        ProgressView()
-                    @unknown default:
-                        trackPlaceholder
-                    }
-                }
-                .frame(width: size.width, height: size.height)
-            } else {
-                trackPlaceholder
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var contentView: some View {
-        if let name = localTrackImageName {
-            Image(name)
-                .resizable()
-                .renderingMode(.template)
-                .foregroundStyle(strokeColor)
-                .scaledToFit()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if let info = circuitInfo {
-            CircuitPathShape(points: info.normalizedPathPoints())
-                .stroke(strokeColor, lineWidth: 3)
         } else if let urlString = imageURL, let url = URL(string: urlString) {
             AsyncImage(url: url) { phase in
                 switch phase {
                 case .success(let image):
                     image
                         .resizable()
+                        .interpolation(.high)
                         .scaledToFit()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 case .failure:
                     trackPlaceholder
                 case .empty:
                     ProgressView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 @unknown default:
                     trackPlaceholder
                 }
             }
+            .frame(width: size.width, height: size.height)
         } else {
             trackPlaceholder
+        }
+    }
+
+    @ViewBuilder
+    private var contentView: some View {
+        if let info = circuitInfo {
+            let pts = info.normalizedPathPoints()
+            if pts.count >= 2 {
+                CircuitPathShape(points: pts)
+                    .stroke(strokeColor, lineWidth: 3)
+            } else if let name = localTrackImageName {
+                trackRasterImage(name: name, maxFrame: true)
+            } else if let urlString = imageURL, let url = URL(string: urlString) {
+                asyncTrackImage(url: url, maxFrame: true)
+            } else {
+                trackPlaceholder
+            }
+        } else if let name = localTrackImageName {
+            trackRasterImage(name: name, maxFrame: true)
+        } else if let urlString = imageURL, let url = URL(string: urlString) {
+            asyncTrackImage(url: url, maxFrame: true)
+        } else {
+            trackPlaceholder
+        }
+    }
+
+    @ViewBuilder
+    private func trackRasterImage(name: String, maxFrame: Bool) -> some View {
+        let img = Image(name)
+            .resizable()
+            .interpolation(.high)
+            .antialiased(true)
+            .renderingMode(.template)
+            .foregroundStyle(strokeColor)
+            .scaledToFit()
+        if maxFrame {
+            img.frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            img
+        }
+    }
+
+    @ViewBuilder
+    private func asyncTrackImage(url: URL, maxFrame: Bool) -> some View {
+        AsyncImage(url: url) { phase in
+            switch phase {
+            case .success(let image):
+                image
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+                    .frame(maxWidth: maxFrame ? .infinity : nil, maxHeight: maxFrame ? .infinity : nil)
+            case .failure:
+                trackPlaceholder
+            case .empty:
+                ProgressView()
+                    .frame(maxWidth: maxFrame ? .infinity : nil, maxHeight: maxFrame ? .infinity : nil)
+            @unknown default:
+                trackPlaceholder
+            }
         }
     }
 

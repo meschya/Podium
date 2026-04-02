@@ -1,6 +1,6 @@
 //
 //  F1APIQualyResponse.swift
-//  Podium — GET https://f1api.dev/api/{year}/{round}/qualy
+//  Podium — квалификация маппится из Jolpica `/{year}/{round}/qualifying.json`
 //
 
 import Foundation
@@ -31,5 +31,10 @@ struct F1APIQualyRow: Decodable {
         if let i = try? c.decode(Int.self, forKey: key) { return i }
         if let s = try? c.decode(String.self, forKey: key), let i = Int(s) { return i }
         return 0
+    }
+
+    init(gridPosition: Int, driver: F1APIDriver) {
+        self.gridPosition = gridPosition
+        self.driver = driver
     }
 }

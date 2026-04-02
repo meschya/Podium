@@ -28,15 +28,140 @@ struct JolpicaSeasonRaceTable: Decodable {
     var Races: [JolpicaSeasonRace]
 }
 
-/// Уик-энд сезона: дата ГП и признак спринта (ключ `Sprint` в JSON).
+/// Слот сессии в календаре Ergast (`date` + `time` UTC).
+struct JolpicaErgastSessionTime: Decodable {
+    var date: String
+    var time: String?
+}
+
+/// Уик-энд сезона: дата ГП, трасса, сессии (FP / спринт / квалификация / гонка).
 struct JolpicaSeasonRace: Decodable {
     var round: String
     var date: String
-    var Sprint: JolpicaSessionStub?
+    var time: String?
+    var raceName: String?
+    var Circuit: JolpicaSeasonCircuit?
+    var FirstPractice: JolpicaErgastSessionTime?
+    var SecondPractice: JolpicaErgastSessionTime?
+    var ThirdPractice: JolpicaErgastSessionTime?
+    var Qualifying: JolpicaErgastSessionTime?
+    var Sprint: JolpicaErgastSessionTime?
+    var SprintQualifying: JolpicaErgastSessionTime?
 
-    struct JolpicaSessionStub: Decodable {}
+    struct JolpicaSeasonCircuit: Decodable {
+        var circuitId: String?
+        var circuitName: String?
+        var Location: JolpicaSeasonLocation?
+    }
+
+    struct JolpicaSeasonLocation: Decodable {
+        var locality: String?
+        var country: String?
+    }
 
     var roundInt: Int { JolpicaDecode.intString(round) }
+}
+
+// MARK: - Ergast driver/constructor on result rows
+
+struct JolpicaErgastNameDriver: Decodable {
+    var givenName: String
+    var familyName: String
+    var permanentNumber: String?
+}
+
+struct JolpicaErgastConstructor: Decodable {
+    var name: String
+}
+
+// MARK: - Single round race results (GET /f1/{year}/{round}/results.json)
+
+struct JolpicaRoundResultsResponse: Decodable {
+    var MRData: JolpicaRoundResultsMRData
+}
+
+struct JolpicaRoundResultsMRData: Decodable {
+    var RaceTable: JolpicaRoundResultsRaceTable
+}
+
+struct JolpicaRoundResultsRaceTable: Decodable {
+    var Races: [JolpicaRoundRaceWithResults]
+}
+
+struct JolpicaRoundRaceWithResults: Decodable {
+    var Results: [JolpicaRaceResultRow]
+}
+
+struct JolpicaRaceResultRow: Decodable {
+    var number: String
+    var position: String
+    var points: String
+    var status: String?
+    var Time: JolpicaGpResultRow.JolpicaResultTime?
+    var Driver: JolpicaErgastNameDriver
+    var Constructor: JolpicaErgastConstructor
+
+    var positionInt: Int { JolpicaDecode.intString(position) }
+    var driverNumber: Int { JolpicaDecode.intString(number) }
+    var pointsInt: Int { JolpicaDecode.intString(points) }
+}
+
+// MARK: - Qualifying (GET /f1/{year}/{round}/qualifying.json)
+
+struct JolpicaRoundQualifyingResponse: Decodable {
+    var MRData: JolpicaRoundQualifyingMRData
+}
+
+struct JolpicaRoundQualifyingMRData: Decodable {
+    var RaceTable: JolpicaRoundQualifyingRaceTable
+}
+
+struct JolpicaRoundQualifyingRaceTable: Decodable {
+    var Races: [JolpicaRoundQualifyingRace]
+}
+
+struct JolpicaRoundQualifyingRace: Decodable {
+    var QualifyingResults: [JolpicaQualifyingResultRow]
+}
+
+struct JolpicaQualifyingResultRow: Decodable {
+    var number: String
+    var position: String
+    var Driver: JolpicaErgastNameDriver
+
+    var gridPosition: Int { JolpicaDecode.intString(position) }
+    var driverNumber: Int { JolpicaDecode.intString(number) }
+}
+
+// MARK: - Sprint race (GET /f1/{year}/{round}/sprint.json)
+
+struct JolpicaRoundSprintResponse: Decodable {
+    var MRData: JolpicaRoundSprintMRData
+}
+
+struct JolpicaRoundSprintMRData: Decodable {
+    var RaceTable: JolpicaRoundSprintRaceTable
+}
+
+struct JolpicaRoundSprintRaceTable: Decodable {
+    var Races: [JolpicaRoundSprintRace]
+}
+
+struct JolpicaRoundSprintRace: Decodable {
+    var SprintResults: [JolpicaSprintTableRow]
+}
+
+struct JolpicaSprintTableRow: Decodable {
+    var number: String
+    var position: String
+    var points: String
+    var grid: String
+    var Driver: JolpicaErgastNameDriver
+
+    var positionInt: Int { JolpicaDecode.intString(position) }
+    var pointsInt: Int { JolpicaDecode.intString(points) }
+    var driverNumber: Int { JolpicaDecode.intString(number) }
+    var gridInt: Int { JolpicaDecode.intString(grid) }
 }
 
 // MARK: - Drivers list (GET /f1/{year}/drivers.json)

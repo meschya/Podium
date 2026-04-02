@@ -16,9 +16,12 @@ struct SeasonSectionView: View {
         selection != nil ? loader.selectedSeasonYear : Calendar.current.component(.year, from: Date())
     }
 
-    /// Гонки из f1api, если загружены для displayYear (и на Seasons, и на Home).
+    /// Гонки из Jolpica/F1APIClient: календарь должен соответствовать `displayYear`.
     private var useF1APICards: Bool {
-        !loader.f1apiRacesForSelectedYear.isEmpty && loader.selectedSeasonYear == displayYear
+        guard !loader.f1apiRacesForSelectedYear.isEmpty else { return false }
+        guard loader.f1apiSeasonYearLoaded == displayYear else { return false }
+        if selection != nil { return loader.selectedSeasonYear == displayYear }
+        return true
     }
 
     private var meetingsForDisplay: [OpenF1Meeting] {
@@ -28,11 +31,24 @@ struct SeasonSectionView: View {
     }
 
     private var f1apiRacesForDisplay: [F1APIRaceInfo] {
-        loader.f1apiRacesForSelectedYear
+        loader.f1apiRacesForSelectedYear.sorted {
+            let d1 = $0.schedule?.race?.date ?? ""
+            let d2 = $1.schedule?.race?.date ?? ""
+            if d1 != d2 { return d1 < d2 }
+            return $0.round < $1.round
+        }
     }
 
+    /// На Home с Jolpica — в приоритете `circuitInfoByMeetingKey` из bootstrap (все трассы сезона по meetingKey);
+    /// иначе карты после `loadSeasonForYear` часто пустые/не совпадают, и карточки рисуются «не тем» кругом.
     private var circuitInfoMap: [Int: CircuitInfo] {
-        (selection != nil || useF1APICards) ? loader.circuitInfoForSelectedYear : loader.circuitInfoByMeetingKey
+        if useF1APICards && selection == nil {
+            return loader.circuitInfoByMeetingKey.isEmpty ? loader.circuitInfoForSelectedYear : loader.circuitInfoByMeetingKey
+        }
+        if selection != nil || useF1APICards {
+            return loader.circuitInfoForSelectedYear
+        }
+        return loader.circuitInfoByMeetingKey
     }
 
     private static let liquidGlassCornerRadius: CGFloat = 24
@@ -42,7 +58,7 @@ struct SeasonSectionView: View {
         let showingF1API = useF1APICards
         let listEmpty = isSeasonsTab
             ? (loader.f1apiRacesForSelectedYear.isEmpty && !loader.isLoadingYear)
-            : (meetingsForDisplay.isEmpty && !useF1APICards)
+            : (meetingsForDisplay.isEmpty && !useF1APICards && !loader.isLoadingYear)
         if listEmpty && !isSeasonsTab {
             EmptyView()
         } else {
@@ -160,9 +176,9 @@ struct SeasonSectionView: View {
                     }
                 }
             }
-            .task(id: selection != nil) {
+            .task(id: "\(selection != nil)_\(displayYear)") {
                 let year = selection != nil ? loader.selectedSeasonYear : Calendar.current.component(.year, from: Date())
-                await loader.loadSeasonFromF1API(year)
+                await loader.loadSeasonFromF1API(year, bindSelectedYear: selection != nil)
             }
         }
     }

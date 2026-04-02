@@ -31,11 +31,13 @@ private struct DriverCupCountryFlag: View {
                 .clipShape(shape)
         } else if alpha2.count == 2 {
             Text(flagEmoji(alpha2: alpha2))
-                .font(.system(size: 12))
+                .font(.system(size: side))
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
                 .frame(height: side, alignment: .leading)
         } else {
             Image(systemName: "flag.fill")
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: max(10, side * 0.92), weight: .medium))
                 .foregroundStyle(.white.opacity(0.55))
                 .frame(height: side, alignment: .leading)
         }
@@ -58,9 +60,9 @@ struct DriversCupView: View {
     private static let heroHeight: CGFloat = 300
     private static let heroPhotoWidth: CGFloat = 118
     private static let photoFillOverscan: CGFloat = 2.6
-    /// Лого команды и флаг — один размер.
+    /// Герой: флаг/мета-иконки. В списке строк флаг = кегль строки команды (`listRowMetaFontSize`).
     private static let metaIconSide: CGFloat = 20
-
+    private static let listRowMetaFontSize: CGFloat = 12
     private func formatStandingsPoints(_ p: Double) -> String {
         if abs(p - Double(Int(p))) < 0.001 { return "\(Int(p))" }
         return String(format: "%.1f", p)
@@ -276,7 +278,7 @@ struct DriversCupView: View {
                             teamName: nav.teamName,
                             countryCode: nav.countryCode,
                             points: nav.points,
-                            iconSide: Self.metaIconSide,
+                            iconSide: Self.listRowMetaFontSize,
                             numberSize: 12,
                             ptsFontSize: 9,
                             ptsHPadding: 9,

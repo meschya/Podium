@@ -16,6 +16,16 @@ struct OpenF1Session: Codable, Identifiable {
 
     var id: Int { sessionKey }
 
+    init(sessionKey: Int, meetingKey: Int, sessionName: String, dateStart: String?, dateEnd: String?, year: Int?) {
+        self.sessionKey = sessionKey
+        self.meetingKey = meetingKey
+        self.sessionName = sessionName
+        self.sessionType = nil
+        self.dateStart = dateStart
+        self.dateEnd = dateEnd
+        self.year = year
+    }
+
     enum CodingKeys: String, CodingKey {
         case sessionKey = "session_key"
         case meetingKey = "meeting_key"

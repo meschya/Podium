@@ -273,7 +273,9 @@ struct HomeView: View {
             if let m = loader.meeting {
                 HeroCircuitMapWithDotsView(
                     circuitInfo: loader.circuitInfo,
-                    meeting: m
+                    meeting: m,
+                    localTrackImageName: String.AppImage.trackImage(circuitName: m.circuitShortName)
+                        ?? String.AppImage.trackImage(circuitName: m.location)
                 )
             }
         }
@@ -1068,6 +1070,7 @@ private struct HeroCircuitMapWithDotsView: View {
     @EnvironmentObject var loader: SeasonDataLoader
     var circuitInfo: CircuitInfo?
     var meeting: OpenF1Meeting
+    var localTrackImageName: String?
 
     private let size = CGSize(width: 208, height: 130)
 
@@ -1076,7 +1079,7 @@ private struct HeroCircuitMapWithDotsView: View {
             TrackMapView(
                 circuitInfo: circuitInfo,
                 imageURL: meeting.circuitImage,
-                localTrackImageName: nil,
+                localTrackImageName: localTrackImageName,
                 compact: true,
                 compactSize: size,
                 strokeColor: .white,

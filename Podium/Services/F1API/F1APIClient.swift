@@ -5,10 +5,10 @@
 
 import Foundation
 
-/// Client for https://f1api.dev — historical race results (1950+).
+/// Совместимый слой над Jolpica (`https://api.jolpi.ca/ergast/f1`): те же типы, что раньше с f1api.dev.
 final class F1APIClient {
     static let shared = F1APIClient()
-    private let baseURL = "https://f1api.dev"
+    private let baseURL = "https://api.jolpi.ca/ergast/f1"
     private let session: URLSession
 
     private init(session: URLSession = .shared) {
@@ -23,37 +23,71 @@ final class F1APIClient {
         return f
     }()
 
-    /// GET /api/{year} — календарь сезона (список гонок для карточек).
-    func seasonCalendar(year: Int) async throws -> [F1APIRaceInfo] {
-        guard let url = URL(string: "\(baseURL)/api/\(year)") else { throw F1APIError.invalidURL }
-        let (data, response) = try await session.data(from: url)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw F1APIError.noData }
-        let decoded = try JSONDecoder().decode(F1APISeasonResponse.self, from: data)
-        return decoded.races.sorted { (r1, r2) in
-            let d1 = r1.schedule?.race?.date ?? ""
-            let d2 = r2.schedule?.race?.date ?? ""
-            return d1 < d2
-        }
+    private func jolpicaURL(path: String) throws -> URL {
+        let sep = path.contains("?") ? "&" : "?"
+        guard let u = URL(string: "\(baseURL)\(path)\(sep)limit=2000") else { throw F1APIError.invalidURL }
+        return u
     }
 
-    /// Round по дате гонки или по уик-энду (пятница/суббота → воскресная гонка).
+    private func fetch(path: String) async throws -> Data {
+        let url = try jolpicaURL(path: path)
+        let (data, response) = try await session.data(from: url)
+        guard let http = response as? HTTPURLResponse else { throw F1APIError.noData }
+        guard (200..<300).contains(http.statusCode) else { throw F1APIError.server(http.statusCode) }
+        return data
+    }
+
+    /// 404 → `nil` data (нет спринта / нет ресурса).
+    private func fetchOptional(path: String) async throws -> Data? {
+        let url = try jolpicaURL(path: path)
+        let (data, response) = try await session.data(from: url)
+        guard let http = response as? HTTPURLResponse else { return nil }
+        if http.statusCode == 404 { return nil }
+        guard (200..<300).contains(http.statusCode) else { throw F1APIError.server(http.statusCode) }
+        return data
+    }
+
+    /// GET `/{year}.json` — календарь сезона.
+    func seasonCalendar(year: Int) async throws -> [F1APIRaceInfo] {
+        let data = try await fetch(path: "/\(year).json")
+        let decoded = try JSONDecoder().decode(JolpicaSeasonResponse.self, from: data)
+        return decoded.MRData.RaceTable.Races
+            .map { r in
+                F1APIRaceInfo(
+                    round: r.roundInt,
+                    raceName: r.raceName,
+                    schedule: F1APISchedule(race: F1APIRaceDate(date: r.date)),
+                    circuit: F1APICircuitInfo(
+                        circuitName: r.Circuit?.circuitName,
+                        country: r.Circuit?.Location?.country,
+                        city: r.Circuit?.Location?.locality
+                    )
+                )
+            }
+            .sorted {
+                let d1 = $0.schedule?.race?.date ?? ""
+                let d2 = $1.schedule?.race?.date ?? ""
+                return d1 < d2
+            }
+    }
+
     func roundForRaceDate(year: Int, raceDate: String) async throws -> Int? {
         let datePrefix = String(raceDate.prefix(10))
         guard !datePrefix.isEmpty else { return nil }
-        guard let url = URL(string: "\(baseURL)/api/\(year)") else { throw F1APIError.invalidURL }
-        let (data, response) = try await session.data(from: url)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
-        let decoded = try? JSONDecoder().decode(F1APISeasonResponse.self, from: data)
-        guard let races = decoded?.races, !races.isEmpty else { return nil }
+        let data = try await fetch(path: "/\(year).json")
+        let decoded = try JSONDecoder().decode(JolpicaSeasonResponse.self, from: data)
+        let races = decoded.MRData.RaceTable.Races
+        guard !races.isEmpty else { return nil }
         let withDate = races.compactMap { r -> (round: Int, date: String)? in
-            guard let date = r.schedule?.race?.date, !date.isEmpty else { return nil }
-            return (r.round, date)
+            let d = r.date
+            guard !d.isEmpty else { return nil }
+            return (r.roundInt, d)
         }
         if let match = withDate.first(where: { $0.date.hasPrefix(datePrefix) || String($0.date.prefix(10)) == datePrefix }) {
             return match.round
         }
         guard let given = Self.dateOnlyFormatter.date(from: datePrefix) else {
-            return withDate.first?.round ?? races.first?.round
+            return withDate.first?.round ?? races.first?.roundInt
         }
         var best: (round: Int, days: Int)? = nil
         for r in withDate {
@@ -64,129 +98,85 @@ final class F1APIClient {
                 best = (r.round, absDays)
             }
         }
-        return best?.round ?? withDate.first?.round ?? races.first?.round
+        return best?.round ?? withDate.first?.round ?? races.first?.roundInt
     }
 
-    /// GET /api/{year}/{round}/race — returns results for one race.
     func raceResults(year: Int, round: Int) async throws -> [RaceResultRow] {
-        let urlString = "\(baseURL)/api/\(year)/\(round)/race"
-        guard let url = URL(string: urlString) else { throw F1APIError.invalidURL }
-        let (data, response) = try await session.data(from: url)
-        guard let http = response as? HTTPURLResponse else { throw F1APIError.noData }
-        guard (200..<300).contains(http.statusCode) else { throw F1APIError.server(http.statusCode) }
-        let decoded = try JSONDecoder().decode(F1APIRaceResponse.self, from: data)
-        return decoded.races.results.map { r in
+        let data = try await fetch(path: "/\(year)/\(round)/results.json")
+        let decoded = try JSONDecoder().decode(JolpicaRoundResultsResponse.self, from: data)
+        guard let rows = decoded.MRData.RaceTable.Races.first?.Results else { return [] }
+        return rows.map { r in
             RaceResultRow(
-                position: r.position,
-                driverNumber: r.driver.number,
-                driverName: "\(r.driver.name) \(r.driver.surname)".trimmingCharacters(in: .whitespaces),
-                teamName: r.team.teamName,
-                time: r.time ?? "—",
-                points: r.points
+                position: r.positionInt,
+                driverNumber: r.driverNumber,
+                driverName: "\(r.Driver.givenName) \(r.Driver.familyName)".trimmingCharacters(in: .whitespaces),
+                teamName: r.Constructor.name,
+                time: r.Time?.time ?? r.status ?? "—",
+                points: r.pointsInt
             )
         }
     }
 
-    /// Очки за спринт по номеру пилота; 404 если в этапе не было спринта.
     func sprintPointsByDriverNumber(year: Int, round: Int) async -> [Int: Int] {
-        let urlString = "\(baseURL)/api/\(year)/\(round)/sprint/race"
-        guard let url = URL(string: urlString) else { return [:] }
-        do {
-            let (data, response) = try await session.data(from: url)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return [:] }
-            let decoded = try JSONDecoder().decode(F1APISprintRaceResponse.self, from: data)
-            var m: [Int: Int] = [:]
-            for row in decoded.races.sprintRaceResults {
-                m[row.driver.number] = row.points
-            }
-            return m
-        } catch {
-            return [:]
+        guard let data = try? await fetchOptional(path: "/\(year)/\(round)/sprint.json"),
+              let decoded = try? JSONDecoder().decode(JolpicaRoundSprintResponse.self, from: data),
+              let rows = decoded.MRData.RaceTable.Races.first?.SprintResults
+        else { return [:] }
+        var m: [Int: Int] = [:]
+        for row in rows {
+            m[row.driverNumber] = row.pointsInt
         }
+        return m
     }
 
-    /// Полные результаты спринта; 404 если в этапе не было спринта.
     func sprintRaceResults(year: Int, round: Int) async -> [F1APISprintRow] {
-        let urlString = "\(baseURL)/api/\(year)/\(round)/sprint/race"
-        guard let url = URL(string: urlString) else { return [] }
-        do {
-            let (data, response) = try await session.data(from: url)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return [] }
-            let decoded = try JSONDecoder().decode(F1APISprintRaceResponse.self, from: data)
-            return decoded.races.sprintRaceResults
-        } catch {
-            return []
+        guard let data = try? await fetchOptional(path: "/\(year)/\(round)/sprint.json"),
+              let decoded = try? JSONDecoder().decode(JolpicaRoundSprintResponse.self, from: data),
+              let rows = decoded.MRData.RaceTable.Races.first?.SprintResults
+        else { return [] }
+        return rows.map {
+            F1APISprintRow(
+                position: $0.positionInt,
+                points: $0.pointsInt,
+                driver: F1APIDriver(
+                    number: $0.driverNumber,
+                    name: $0.Driver.givenName,
+                    surname: $0.Driver.familyName
+                )
+            )
         }
     }
 
-    /// GET /api/{year}/{round}/qualy — номер пилота на поуле (`gridPosition == 1`).
     func poleDriverNumber(year: Int, round: Int) async throws -> Int? {
-        let urlString = "\(baseURL)/api/\(year)/\(round)/qualy"
-        guard let url = URL(string: urlString) else { throw F1APIError.invalidURL }
-        let (data, response) = try await session.data(from: url)
-        guard let http = response as? HTTPURLResponse else { throw F1APIError.noData }
-        guard (200..<300).contains(http.statusCode) else { throw F1APIError.server(http.statusCode) }
-        let decoded = try JSONDecoder().decode(F1APIQualyResponse.self, from: data)
-        return decoded.races.qualyResults.first(where: { $0.gridPosition == 1 })?.driver.number
+        let data = try await fetch(path: "/\(year)/\(round)/qualifying.json")
+        let decoded = try JSONDecoder().decode(JolpicaRoundQualifyingResponse.self, from: data)
+        guard let list = decoded.MRData.RaceTable.Races.first?.QualifyingResults else { return nil }
+        return list.first(where: { $0.gridPosition == 1 })?.driverNumber
     }
 
-    /// Полный лист результатов квалификации для расчёта grid-vs-race delta.
     func qualyResults(year: Int, round: Int) async throws -> [F1APIQualyRow] {
-        let urlString = "\(baseURL)/api/\(year)/\(round)/qualy"
-        guard let url = URL(string: urlString) else { throw F1APIError.invalidURL }
-        let (data, response) = try await session.data(from: url)
-        guard let http = response as? HTTPURLResponse else { throw F1APIError.noData }
-        guard (200..<300).contains(http.statusCode) else { throw F1APIError.server(http.statusCode) }
-        let decoded = try JSONDecoder().decode(F1APIQualyResponse.self, from: data)
-        return decoded.races.qualyResults
+        let data = try await fetch(path: "/\(year)/\(round)/qualifying.json")
+        let decoded = try JSONDecoder().decode(JolpicaRoundQualifyingResponse.self, from: data)
+        guard let list = decoded.MRData.RaceTable.Races.first?.QualifyingResults else { return [] }
+        return list.map {
+            F1APIQualyRow(
+                gridPosition: $0.gridPosition,
+                driver: F1APIDriver(
+                    number: $0.driverNumber,
+                    name: $0.Driver.givenName,
+                    surname: $0.Driver.familyName
+                )
+            )
+        }
     }
 
-    /// Sprint pole (обычно Sprint Qualifying / Sprint Shootout), API может отличаться по ключам.
-    /// Пробуем несколько известных endpoint'ов и вытаскиваем `gridPosition == 1`.
+    /// Jolpica не отдаёт отдельный sprint qualy; берём старт с поула спринта (`grid == 1`).
     func sprintPoleDriverNumber(year: Int, round: Int) async -> Int? {
-        let candidates = [
-            "\(baseURL)/api/\(year)/\(round)/sprint/qualy",
-            "\(baseURL)/api/\(year)/\(round)/sprint/shootout",
-            "\(baseURL)/api/\(year)/\(round)/shootout"
-        ]
-        for path in candidates {
-            guard let url = URL(string: path) else { continue }
-            do {
-                let (data, response) = try await session.data(from: url)
-                guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { continue }
-                if let num = Self.extractPoleDriverNumber(from: data) {
-                    return num
-                }
-            } catch {
-                continue
-            }
-        }
-        return nil
-    }
-
-    /// Мягкий парсинг: формат в sprint endpoint'ах плавает, поэтому ищем массивы результатов и строку с `gridPosition == 1`.
-    private static func extractPoleDriverNumber(from data: Data) -> Int? {
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let races = root["races"] as? [String: Any] else { return nil }
-        let keys = ["qualyResults", "sprintQualyResults", "shootoutResults", "sprintShootoutResults"]
-        for key in keys {
-            guard let rows = races[key] as? [[String: Any]] else { continue }
-            for row in rows {
-                let gp = intValue(row["gridPosition"])
-                if gp == 1,
-                   let driver = row["driver"] as? [String: Any],
-                   let number = intValue(driver["number"]) {
-                    return number
-                }
-            }
-        }
-        return nil
-    }
-
-    private static func intValue(_ any: Any?) -> Int? {
-        if let i = any as? Int { return i }
-        if let s = any as? String, let i = Int(s) { return i }
-        return nil
+        guard let data = try? await fetchOptional(path: "/\(year)/\(round)/sprint.json"),
+              let decoded = try? JSONDecoder().decode(JolpicaRoundSprintResponse.self, from: data),
+              let rows = decoded.MRData.RaceTable.Races.first?.SprintResults
+        else { return nil }
+        return rows.first(where: { $0.gridInt == 1 })?.driverNumber
     }
 }
 

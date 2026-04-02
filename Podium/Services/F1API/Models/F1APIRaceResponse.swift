@@ -5,7 +5,7 @@
 
 import Foundation
 
-/// Response for GET https://f1api.dev/api/{year}/{round}/race
+/// Старый формат f1api.dev; гонка маппится из Jolpica `/{year}/{round}/results.json`.
 struct F1APIRaceResponse: Decodable {
     var season: Int
     var races: F1APIRace
@@ -47,6 +47,12 @@ struct F1APIDriver: Decodable {
     var number: Int
     var name: String
     var surname: String
+
+    init(number: Int, name: String, surname: String) {
+        self.number = number
+        self.name = name
+        self.surname = surname
+    }
 }
 
 struct F1APITeam: Decodable {

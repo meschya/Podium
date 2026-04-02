@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct SessionTimelineChart: View {
     var sessions: [OpenF1Session]
@@ -7,13 +8,12 @@ struct SessionTimelineChart: View {
     private let dateColumnWidth: CGFloat = 76
     private let lineWidth: CGFloat = 2
     private let timeColumnWidth: CGFloat = 48
-    private let hourHeight: CGFloat = 36
-    private let blockCornerRadius: CGFloat = 8
+    /// Высота одного часа на полосе — больше, чтобы сессии и подписи не превращались в линию.
+    private let hourHeight: CGFloat = 44
     private let stripInset: CGFloat = 6
     private let outerPadding: CGFloat = 6
     private let cardSpacing: CGFloat = 12
     private static let liquidGlassCornerRadius: CGFloat = 24
-    private static let eventRed = Color(red: 180/255, green: 50/255, blue: 50/255)
 
     var body: some View {
         let eventTZ = eventTimeZone(from: eventGmtOffset)
@@ -56,16 +56,47 @@ struct SessionTimelineChart: View {
         )
     }
 
-    private func contentHeight(dayStart: Date, items: [SessionItem], calendar: Calendar) -> CGFloat {
+    /// Начало календарного часа, в котором лежит `date` (в таймзоне `calendar`).
+    /// Важно: нельзя делать `dateInterval(...)?.start ?? date` — при `nil` от `dateInterval` ось совпадала бы с полным временем сессии (19:30), `timeIntervalSince(rangeStartHour)` давал 0 и блок рисовался с y=0 (как старт в 19:00).
+    private func startOfHour(containing date: Date, calendar: Calendar) -> Date {
+        if let s = calendar.dateInterval(of: .hour, for: date)?.start {
+            return s
+        }
+        var wall = calendar.dateComponents(in: calendar.timeZone, from: date)
+        wall.minute = 0
+        wall.second = 0
+        wall.nanosecond = 0
+        if let d = calendar.date(from: wall) { return d }
+        var c = calendar.dateComponents([.year, .month, .day, .hour], from: date)
+        c.calendar = calendar
+        c.timeZone = calendar.timeZone
+        c.minute = 0
+        c.second = 0
+        c.nanosecond = 0
+        return calendar.date(from: c) ?? date
+    }
+
+    /// Общая геометрия дня: один источник правды для высоты карточки и масштаба блоков.
+    private func timelineMetrics(dayStart: Date, items: [SessionItem], calendar: Calendar) -> (rangeStartHour: Date, stripHeight: CGFloat, hourCount: Int) {
+        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart.addingTimeInterval(86400)
         let rangeStart = items.map(\.start).min() ?? dayStart
-        let rangeEnd = items.map(\.end).max() ?? dayStart
-        let rangeStartHour = calendar.date(bySettingHour: calendar.component(.hour, from: rangeStart), minute: 0, second: 0, of: dayStart) ?? rangeStart
-        let rangeEndRounded = calendar.date(bySettingHour: calendar.component(.hour, from: rangeEnd), minute: 0, second: 0, of: dayStart) ?? rangeEnd
-        let rangeEndHour = calendar.date(byAdding: .hour, value: 1, to: rangeEndRounded) ?? rangeEnd
-        let span = rangeEndHour.timeIntervalSince(rangeStartHour)
-        let hourCount = max(1, Int(span / 3600))
+        let rangeEnd = items.map(\.end).max() ?? dayEnd
+        let rangeStartHour = startOfHour(containing: rangeStart, calendar: calendar)
+        let endHourFloor = startOfHour(containing: rangeEnd, calendar: calendar)
+        let rangeEndHour = calendar.date(byAdding: .hour, value: 1, to: endHourFloor) ?? rangeEnd
+        var span = rangeEndHour.timeIntervalSince(rangeStartHour)
+        let latestEndSec = items.map { $0.end.timeIntervalSince(rangeStartHour) }.max() ?? 0
+        span = max(span, latestEndSec + 30 * 60)
+        span = max(span, 3600)
+        let coreHours = max(1, Int(ceil(span / 3600)))
+        let hourCount = coreHours + 1
         let stripHeight = CGFloat(hourCount) * hourHeight
-        return stripHeight + stripInset * 2 + outerPadding * 2
+        return (rangeStartHour, stripHeight, hourCount)
+    }
+
+    private func contentHeight(dayStart: Date, items: [SessionItem], calendar: Calendar) -> CGFloat {
+        let m = timelineMetrics(dayStart: dayStart, items: items, calendar: calendar)
+        return m.stripHeight + stripInset * 2 + outerPadding * 2
     }
 
     private static let timelineLineColor = Color(.separator)
@@ -88,40 +119,29 @@ struct SessionTimelineChart: View {
     }
 
     private func timelineBlock(dayStart: Date, items: [SessionItem], calendar: Calendar) -> some View {
-        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart.addingTimeInterval(86400)
-        let rangeStart = items.map(\.start).min() ?? dayStart
-        let rangeEnd = items.map(\.end).max() ?? dayEnd
-        let rangeStartHour = calendar.date(bySettingHour: calendar.component(.hour, from: rangeStart), minute: 0, second: 0, of: dayStart) ?? rangeStart
-        let rangeEndRounded = calendar.date(bySettingHour: calendar.component(.hour, from: rangeEnd), minute: 0, second: 0, of: dayStart) ?? rangeEnd
-        let rangeEndHour = calendar.date(byAdding: .hour, value: 1, to: rangeEndRounded) ?? rangeEnd
-        let span = rangeEndHour.timeIntervalSince(rangeStartHour)
-        let hourCount = max(1, Int(span / 3600))
-        let stripHeight = CGFloat(hourCount) * hourHeight
-        let totalStripHeight = stripHeight + stripInset * 2
+        let m = timelineMetrics(dayStart: dayStart, items: items, calendar: calendar)
+        let totalStripHeight = m.stripHeight + stripInset * 2
 
         return HStack(alignment: .top, spacing: 0) {
-            timeLabels(from: rangeStartHour, hourCount: hourCount, calendar: calendar)
-                .frame(width: timeColumnWidth, height: stripHeight)
+            timeLabels(from: m.rangeStartHour, hourCount: m.hourCount, calendar: calendar)
+                .frame(width: timeColumnWidth, height: m.stripHeight)
                 .padding(.leading, stripInset)
                 .padding(.top, stripInset)
+                .padding(.bottom, stripInset)
 
-            ZStack(alignment: .topLeading) {
-                hourLines(hourCount: hourCount, height: stripHeight)
-                timelineStripBlocks(
-                    items: items,
-                    rangeStartHour: rangeStartHour,
-                    span: span,
-                    stripHeight: stripHeight,
-                    calendar: calendar
-                )
-            }
+            timelineStripBlocks(
+                items: items,
+                rangeStartHour: m.rangeStartHour,
+                stripHeight: m.stripHeight,
+                hourCount: m.hourCount,
+                calendar: calendar
+            )
             .frame(maxWidth: .infinity)
-            .frame(height: stripHeight)
+            .frame(height: m.stripHeight)
             .padding(.trailing, stripInset)
             .padding(.top, stripInset)
             .padding(.bottom, stripInset)
             .padding(.leading, 6)
-            .clipped()
         }
         .frame(height: totalStripHeight)
         .padding(outerPadding)
@@ -138,8 +158,9 @@ struct SessionTimelineChart: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
-                    .frame(height: hourHeight)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    // Линии сетки на полосе стоят у верхнего края каждого часа (y = 0, hourHeight, …).
+                    // Без .top текст по центру 44pt — визуально «время не на линии».
+                    .frame(maxWidth: .infinity, minHeight: hourHeight, maxHeight: hourHeight, alignment: .topLeading)
             }
         }
     }
@@ -152,68 +173,29 @@ struct SessionTimelineChart: View {
         return f.string(from: date)
     }
 
-    private func hourLines(hourCount: Int, height: CGFloat) -> some View {
-        VStack(spacing: 0) {
-            ForEach(0..<hourCount, id: \.self) { _ in
-                Rectangle()
-                    .fill(Self.timelineLineColor)
-                    .frame(height: 1)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: hourHeight)
+    /// Сетка + карточки в **одном** UIKit-view: одна система координат (линии на y = 0, 44, 88… и блоки с тем же y). Раньше линии были SwiftUI, блоки — UIKit; в ScrollView они могли визуально расходиться с реальным временем.
+    private func timelineStripBlocks(items: [SessionItem], rangeStartHour: Date, stripHeight: CGFloat, hourCount: Int, calendar: Calendar) -> some View {
+        let layouts: [TimelineStripLayout] = items
+            .sorted { $0.start < $1.start }
+            .map { it in
+                let startSec = it.start.timeIntervalSince(rangeStartHour)
+                let durationSec = max(0, it.end.timeIntervalSince(it.start))
+                let topSec = max(0, startSec)
+                let y = min(max(0, stripHeight - 1), CGFloat(topSec / 3600.0) * hourHeight)
+                let rawH = max(1, CGFloat(durationSec / 3600.0) * hourHeight)
+                let h = min(rawH, max(1, stripHeight - y))
+                return TimelineStripLayout(item: it, y: y, h: h)
             }
-        }
-    }
 
-    private static let positionOffsetMinutes: Int = 30
-
-    private func timelineStripBlocks(items: [SessionItem], rangeStartHour: Date, span: TimeInterval, stripHeight: CGFloat, calendar: Calendar) -> some View {
-        let safeSpan = max(1.0, span)
-        let offsetSec = TimeInterval(Self.positionOffsetMinutes * 60)
-        let positioned: [(item: SessionItem, y: CGFloat, h: CGFloat)] = items.map { it in
-            let startSec = it.start.timeIntervalSince(rangeStartHour)
-            let durationSec = it.end.timeIntervalSince(it.start)
-            let topSec = max(0, startSec) + offsetSec
-            let durSec = max(0, durationSec)
-            let y = min(stripHeight, stripHeight * CGFloat(topSec / safeSpan))
-            let h = stripHeight * CGFloat(durSec / safeSpan)
-            return (it, y, h)
-        }.sorted { $0.y < $1.y }
-        let withGap: [(item: SessionItem, gap: CGFloat, h: CGFloat)] = positioned.enumerated().map { index, p in
-            let gap: CGFloat = index == 0 ? p.y : max(0, p.y - (positioned[index - 1].y + positioned[index - 1].h))
-            return (p.item, gap, p.h)
-        }
-        return VStack(spacing: 0) {
-            ForEach(Array(withGap.enumerated()), id: \.element.item.key) { _, entry in
-                Spacer()
-                    .frame(height: entry.gap)
-                sessionBlockContent(item: entry.item, height: entry.h, timeZone: calendar.timeZone)
-            }
-            Spacer(minLength: 0)
-        }
-        .frame(height: stripHeight)
-        .frame(maxWidth: .infinity, alignment: .top)
-    }
-
-    private func sessionBlockContent(item: SessionItem, height: CGFloat, timeZone: TimeZone = .current) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(item.short)
-                .font(Font.custom(FontWeight.titilliumWebSemiBold.rawValue, size: 13))
-                .foregroundStyle(.white)
-            Text(blockTimeRange(item.start, end: item.end, timeZone: timeZone))
-                .font(.system(size: 11, weight: .regular))
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: height)
-        .background(Self.eventRed.opacity(0.2))
-        .clipShape(RoundedRectangle(cornerRadius: blockCornerRadius))
-        .overlay(
-            RoundedRectangle(cornerRadius: blockCornerRadius)
-                .stroke(Color.white.opacity(0.3), lineWidth: 1)
+        return TimelineSessionStripUIViewRepresentable(
+            layouts: layouts,
+            stripHeight: stripHeight,
+            hourCount: hourCount,
+            hourLineHeight: hourHeight,
+            timeZone: calendar.timeZone
         )
+        .frame(maxWidth: .infinity, minHeight: stripHeight, maxHeight: stripHeight)
+        .clipped()
     }
 
     private func dayHeaderShort(_ day: Date, timeZone: TimeZone = .current) -> String {
@@ -222,14 +204,6 @@ struct SessionTimelineChart: View {
         f.timeZone = timeZone
         f.dateFormat = "EEE d MMM"
         return f.string(from: day)
-    }
-
-    private func blockTimeRange(_ start: Date, end: Date, timeZone: TimeZone = .current) -> String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = timeZone
-        f.dateFormat = "HH:mm"
-        return "\(f.string(from: start)) – \(f.string(from: end))"
     }
 
     private func eventTimeZone(from gmtOffset: String?) -> TimeZone? {
@@ -249,6 +223,14 @@ struct SessionTimelineChart: View {
         if let d = iso.date(from: s) { return d }
         iso.formatOptions = [.withInternetDateTime]
         if let d = iso.date(from: s) { return d }
+        if s.hasSuffix("Z"), s.count >= 20 {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.timeZone = TimeZone(identifier: "UTC")
+            f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+            let core = String(s.dropLast())
+            if core.count >= 19, let d = f.date(from: String(core.prefix(19))) { return d }
+        }
         let hasTimezone = s.contains("Z") || s.range(of: #"[+-]\d{2}:?\d{0,2}$"#, options: .regularExpression) != nil
         if !hasTimezone, let tz = eventTimeZone ?? TimeZone(identifier: "UTC") {
             let f = DateFormatter()
@@ -287,4 +269,154 @@ private struct SessionItem {
     var short: String
     var start: Date
     var end: Date
+}
+
+private struct TimelineStripLayout: Identifiable {
+    var id: Int { item.key }
+    var item: SessionItem
+    var y: CGFloat
+    var h: CGFloat
+}
+
+// MARK: - UIKit strip (явные CGRect, обход бага SwiftUI Layout+ForEach → один subview)
+
+private struct TimelineSessionStripUIViewRepresentable: UIViewRepresentable {
+    var layouts: [TimelineStripLayout]
+    var stripHeight: CGFloat
+    var hourCount: Int
+    var hourLineHeight: CGFloat
+    var timeZone: TimeZone
+
+    func makeUIView(context: Context) -> TimelineSessionUIKitContainer {
+        let v = TimelineSessionUIKitContainer()
+        v.backgroundColor = .clear
+        v.clipsToBounds = true
+        return v
+    }
+
+    func updateUIView(_ uiView: TimelineSessionUIKitContainer, context: Context) {
+        uiView.apply(
+            layouts: layouts,
+            stripHeight: stripHeight,
+            hourCount: hourCount,
+            hourLineHeight: hourLineHeight,
+            timeZone: timeZone
+        )
+        DispatchQueue.main.async {
+            uiView.setNeedsLayout()
+            uiView.layoutIfNeeded()
+        }
+    }
+}
+
+private final class TimelineSessionUIKitContainer: UIView {
+    private var layoutRows: [TimelineStripLayout] = []
+    private var stripHeightPts: CGFloat = 0
+    private var hourCountStored: Int = 0
+    private var hourLineHeightPts: CGFloat = 44
+    private var lineViews: [UIView] = []
+    private var blockViews: [TimelineUIKitBlockView] = []
+
+    func apply(layouts: [TimelineStripLayout], stripHeight: CGFloat, hourCount: Int, hourLineHeight: CGFloat, timeZone: TimeZone) {
+        layoutRows = layouts
+        stripHeightPts = stripHeight
+        hourCountStored = max(0, hourCount)
+        hourLineHeightPts = hourLineHeight
+
+        lineViews.forEach { $0.removeFromSuperview() }
+        lineViews = []
+        for _ in 0..<hourCountStored {
+            let lv = UIView()
+            lv.backgroundColor = UIColor.separator
+            lv.isUserInteractionEnabled = false
+            addSubview(lv)
+            lineViews.append(lv)
+        }
+
+        while blockViews.count < layouts.count {
+            let b = TimelineUIKitBlockView()
+            addSubview(b)
+            blockViews.append(b)
+        }
+        while blockViews.count > layouts.count {
+            blockViews.removeLast().removeFromSuperview()
+        }
+
+        for (i, L) in layouts.enumerated() {
+            blockViews[i].configure(item: L.item, timeZone: timeZone)
+        }
+        for b in blockViews {
+            bringSubviewToFront(b)
+        }
+        invalidateIntrinsicContentSize()
+        setNeedsLayout()
+    }
+
+    override var intrinsicContentSize: CGSize {
+        CGSize(width: UIView.noIntrinsicMetric, height: stripHeightPts)
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let w = bounds.width
+        for (i, lv) in lineViews.enumerated() {
+            let y = CGFloat(i) * hourLineHeightPts
+            lv.frame = CGRect(x: 0, y: y, width: w, height: 1)
+        }
+        for (i, b) in blockViews.enumerated() {
+            guard i < layoutRows.count else { continue }
+            let L = layoutRows[i]
+            b.frame = CGRect(x: 0, y: L.y, width: w, height: L.h)
+        }
+    }
+}
+
+private final class TimelineUIKitBlockView: UIView {
+    private let titleLabel = UILabel()
+    private let timeLabel = UILabel()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        layer.cornerRadius = 8
+        layer.masksToBounds = true
+        backgroundColor = UIColor(red: 180 / 255, green: 50 / 255, blue: 50 / 255, alpha: 0.2)
+        layer.borderColor = UIColor.white.withAlphaComponent(0.3).cgColor
+        layer.borderWidth = 1
+
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        timeLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.textColor = .white
+        timeLabel.textColor = .secondaryLabel
+        titleLabel.font = UIFont(name: FontWeight.titilliumWebSemiBold.rawValue, size: 13)
+            ?? .systemFont(ofSize: 13, weight: .semibold)
+        timeLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        titleLabel.numberOfLines = 2
+        timeLabel.numberOfLines = 2
+        titleLabel.adjustsFontSizeToFitWidth = true
+        titleLabel.minimumScaleFactor = 0.85
+        timeLabel.adjustsFontSizeToFitWidth = true
+        timeLabel.minimumScaleFactor = 0.8
+
+        addSubview(titleLabel)
+        addSubview(timeLabel)
+        NSLayoutConstraint.activate([
+            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            timeLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
+            timeLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            timeLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+        ])
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    func configure(item: SessionItem, timeZone: TimeZone) {
+        titleLabel.text = item.short
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = timeZone
+        f.dateFormat = "HH:mm"
+        timeLabel.text = "\(f.string(from: item.start)) – \(f.string(from: item.end))"
+    }
 }

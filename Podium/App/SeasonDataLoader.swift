@@ -141,6 +141,9 @@ final class SeasonDataLoader: ObservableObject {
     private(set) var liveStreamStarted = false
     /// Таск: раз в 1 с снэпшот → считаем точки → обновляем только UIKit, без SwiftUI.
     private var liveFlushTask: Task<Void, Never>?
+    /// OpenF1-сессии того же уик-энда, что и герой с Jolpica — для корректного `session_key` в лайве/MQTT.
+    private var liveOpenF1SessionsForNextMeeting: [OpenF1Session] = []
+
     /// Опрос позиций в гонке для топ‑3 лидеров (REST OpenF1).
     private var livePositionsPollTask: Task<Void, Never>?
     /// Доп. источник координат: REST `/location` (MQTT может отставать или приходить редко).
@@ -175,10 +178,12 @@ final class SeasonDataLoader: ObservableObject {
     @Published var circuitInfoForSelectedYear: [Int: CircuitInfo] = [:]
     @Published var isLoadingYear = false
 
-    /// Календарь сезона из f1api.dev (для таба Seasons — карточки и round совпадают с API).
+    /// Календарь сезона из Jolpica (для таба Seasons — карточки и round совпадают с API).
     @Published var f1apiRacesForSelectedYear: [F1APIRaceInfo] = []
+    /// Год, для которого последний раз успешно заполнили `f1apiRacesForSelectedYear` (и Home, и Seasons).
+    @Published private(set) var f1apiSeasonYearLoaded: Int?
 
-    /// Wins / podiums / poles по сезону из f1api.dev (`/race` + `/qualy` по round).
+    /// Wins / podiums / poles по сезону из Jolpica (`results` + `qualifying` по round).
     @Published var cupTrophyByDriver: [Int: (wins: Int, podiums: Int, poles: Int)] = [:]
     @Published var cupTrophyYear: Int?
     private var cupTrophyComputeTask: Task<Void, Never>?
@@ -224,7 +229,7 @@ final class SeasonDataLoader: ObservableObject {
     }
 
     /// Загрузка календаря сезона из f1api + Open F1 (трассы для карт на карточках).
-    func loadSeasonFromF1API(_ year: Int) async {
+    func loadSeasonFromF1API(_ year: Int, bindSelectedYear: Bool = true) async {
         SeasonLoaderLog.line("loadSeasonFromF1API(year: \(year)) start")
         await MainActor.run { isLoadingYear = true }
         defer { Task { @MainActor in self.isLoadingYear = false } }
@@ -232,8 +237,9 @@ final class SeasonDataLoader: ObservableObject {
             let races = try await F1APIClient.shared.seasonCalendar(year: year)
             SeasonLoaderLog.line("loadSeasonFromF1API: F1APIClient.seasonCalendar → \(races.count) races")
             await MainActor.run {
-                selectedSeasonYear = year
+                if bindSelectedYear { selectedSeasonYear = year }
                 f1apiRacesForSelectedYear = races
+                f1apiSeasonYearLoaded = year
                 cupTrophyByDriver = [:]
                 cupTrophyYear = nil
             }
@@ -260,7 +266,10 @@ final class SeasonDataLoader: ObservableObject {
             SeasonLoaderLog.line("loadSeasonFromF1API(year: \(year)) done")
         } catch {
             SeasonLoaderLog.line("loadSeasonFromF1API(year: \(year)) error: \(error.localizedDescription)")
-            await MainActor.run { f1apiRacesForSelectedYear = [] }
+            await MainActor.run {
+                f1apiRacesForSelectedYear = []
+                f1apiSeasonYearLoaded = nil
+            }
         }
     }
 
@@ -406,7 +415,7 @@ final class SeasonDataLoader: ObservableObject {
         }
     }
 
-    /// Wins / podiums / poles — только f1api.dev: `/race` и `/qualy` по round (без OpenF1, без лавины 429).
+    /// Wins / podiums / poles — Jolpica: `results` и `qualifying` по round (без OpenF1, без лавины 429).
     private func computeCupTrophiesFromF1API(year: Int) async {
         guard !Task.isCancelled else { return }
         do {
@@ -502,7 +511,7 @@ final class SeasonDataLoader: ObservableObject {
         }
     }
 
-    /// Результаты только из f1api.dev. Round — из календаря API по дате/уик-энду; при неудаче — roundHint (индекс+1).
+    /// Результаты из Jolpica. Round — из календаря API по дате/уик-энду; при неудаче — roundHint (индекс+1).
     func loadRaceResults(meetingKey: Int, year: Int, raceDate: String, roundHint: Int? = nil) {
         loadResultsTask?.cancel()
         let key = meetingKey
@@ -618,8 +627,48 @@ final class SeasonDataLoader: ObservableObject {
                     return (start <= now && now <= end) || start >= now
                 }
                 let first = currentOrNext ?? sortedByDate.first
-                if let first = first {
-                    SeasonLoaderLog.line("load: current/next meeting key=\(first.meetingKey) name=\(first.meetingName)")
+
+                var usedJolpicaHero = false
+                if let jRaces = try? await JolpicaF1Client.shared.seasonRaces(year: year),
+                   let picked = JolpicaHomeHero.pickNextOrCurrent(races: jRaces, now: now),
+                   let synM = JolpicaHomeHero.openF1Meeting(from: picked, year: year) {
+                    let synSessions = JolpicaHomeHero.openF1Sessions(from: picked, meetingKey: synM.meetingKey)
+                    if !synSessions.isEmpty {
+                        usedJolpicaHero = true
+                        SeasonLoaderLog.line("load: Jolpica hero round=\(picked.roundInt) name=\(synM.meetingName) sessions=\(synSessions.count)")
+                        let matchedOm = sortedByDate.first { JolpicaHomeHero.sameRaceWeekend(openF1: $0, jolpica: picked) }
+                        let circuitUrl = matchedOm?.circuitInfoUrl ?? first?.circuitInfoUrl
+                        let circuitTask = circuitUrl.map { url in Task { try? await client.circuitInfo(urlString: url) } }
+                        let liveSessionsTask = Task {
+                            if let om = matchedOm { return (try? await client.sessions(meetingKey: om.meetingKey)) ?? [] }
+                            return []
+                        }
+                        let info: CircuitInfo? = if let t = circuitTask { await t.value } else { nil }
+                        let liveSessions = await liveSessionsTask.value
+                        let sortedOpenF1 = liveSessions.sorted { ($0.dateStart ?? "") < ($1.dateStart ?? "") }
+                        let useOpenF1Schedule = matchedOm != nil && !sortedOpenF1.isEmpty
+                        await MainActor.run {
+                            self.meeting = useOpenF1Schedule ? (matchedOm ?? synM) : synM
+                            self.nextMeetingSessions = useOpenF1Schedule ? sortedOpenF1 : synSessions
+                            self.liveOpenF1SessionsForNextMeeting = sortedOpenF1
+                            if let info = info, !info.x.isEmpty, !info.y.isEmpty {
+                                self.circuitInfo = info
+                            } else {
+                                self.circuitInfo = nil
+                            }
+                            self.syncUpcomingRaceWidget()
+                            if self.currentLiveSessionKey() != nil {
+                                self.startLiveStreamIfNeeded()
+                            } else {
+                                self.stopLiveStream()
+                            }
+                        }
+                    }
+                }
+
+                if !usedJolpicaHero, let first = first {
+                    SeasonLoaderLog.line("load: current/next meeting key=\(first.meetingKey) name=\(first.meetingName) (OpenF1 hero)")
+                    await MainActor.run { self.liveOpenF1SessionsForNextMeeting = [] }
                     await MainActor.run { self.meeting = first }
                     // Параллельно: circuitInfo и сессии — MQTT стартует сразу, не ждём circuitInfo.
                     SeasonLoaderLog.line("load: circuitInfo + sessions(meetingKey: \(first.meetingKey))")
@@ -770,7 +819,7 @@ final class SeasonDataLoader: ObservableObject {
                     self.scheduleCupTrophiesForYear(year)
                 }
                 SeasonLoaderLog.line("load: isLoaded=true; cup trophies scheduled in background")
-                if let nextMeeting = first {
+                if !usedJolpicaHero, let nextMeeting = first {
                     SeasonLoaderLog.line("load: refresh nextMeetingSessions meetingKey=\(nextMeeting.meetingKey)")
                     let sessions = (try? await client.sessions(meetingKey: nextMeeting.meetingKey)) ?? []
                     await MainActor.run {
@@ -1167,7 +1216,8 @@ final class SeasonDataLoader: ObservableObject {
     /// session_key сессии, которая идёт сейчас (now между date_start и date_end), или nil.
     func currentLiveSessionKey() -> Int? {
         let now = Date()
-        for s in nextMeetingSessions {
+        let sessions = liveOpenF1SessionsForNextMeeting.isEmpty ? nextMeetingSessions : liveOpenF1SessionsForNextMeeting
+        for s in sessions {
             guard let start = parseSessionDate(s.dateStart),
                   let end = parseSessionDate(s.dateEnd) else { continue }
             if now >= start && now <= end {

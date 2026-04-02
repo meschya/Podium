@@ -43,6 +43,40 @@ struct OpenF1Meeting: Codable, Identifiable, Hashable {
         Self.dateParsers.lazy.compactMap { $0.date(from: dateEnd) }.first
     }
 
+    init(
+        meetingKey: Int,
+        meetingName: String,
+        meetingOfficialName: String?,
+        location: String,
+        countryName: String,
+        countryCode: String,
+        countryFlag: String?,
+        circuitShortName: String,
+        circuitType: String?,
+        circuitImage: String?,
+        circuitInfoUrl: String?,
+        dateStart: String,
+        dateEnd: String,
+        year: Int,
+        gmtOffset: String?
+    ) {
+        self.meetingKey = meetingKey
+        self.meetingName = meetingName
+        self.meetingOfficialName = meetingOfficialName
+        self.location = location
+        self.countryName = countryName
+        self.countryCode = countryCode
+        self.countryFlag = countryFlag
+        self.circuitShortName = circuitShortName
+        self.circuitType = circuitType
+        self.circuitImage = circuitImage
+        self.circuitInfoUrl = circuitInfoUrl
+        self.dateStart = dateStart
+        self.dateEnd = dateEnd
+        self.year = year
+        self.gmtOffset = gmtOffset
+    }
+
     enum CodingKeys: String, CodingKey {
         case meetingKey = "meeting_key"
         case meetingName = "meeting_name"

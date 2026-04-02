@@ -5,7 +5,7 @@
 
 import Foundation
 
-/// Response for GET https://f1api.dev/api/{year} — календарь сезона с официальными round.
+/// Старый JSON-формат f1api.dev; календарь в приложении идёт через Jolpica (`/{year}.json`).
 struct F1APISeasonResponse: Decodable {
     var season: Int
     var races: [F1APIRaceInfo]
