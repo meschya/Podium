@@ -57,6 +57,8 @@ struct HomeView: View {
                             upcomingRacesSection
                                 .padding(.top, -50)
                                 .zIndex(1)
+                            driversChampionshipSection
+                                .zIndex(1)
                             teamsChampionshipSection
                                 .zIndex(1)
                             sessionScheduleSection
@@ -78,6 +80,14 @@ struct HomeView: View {
             .task {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                     showHeroCircuitMap = true
+                }
+            }
+            .task {
+                let year = Calendar.current.component(.year, from: Date())
+                guard loader.selectedSeasonYear == year else { return }
+                if loader.championshipDriverStandings.isEmpty,
+                   loader.driversCupTabStandingsYear != year || loader.driversCupTabStandings.isEmpty {
+                    await loader.loadDriversCupTabStandings(year: year)
                 }
             }
             .task {
@@ -288,6 +298,48 @@ struct HomeView: View {
         SeasonSectionView()
     }
 
+    /// Пилоты для карточек на главной: сначала bootstrap, иначе таблица кубка за текущий год.
+    private var homeDriverStandingsRows: [(position: Int, driverNumber: Int, fullName: String, teamName: String, points: Double, countryCode: String)] {
+        let year = Calendar.current.component(.year, from: Date())
+        if !loader.championshipDriverStandings.isEmpty {
+            return loader.championshipDriverStandings
+        }
+        if loader.driversCupTabStandingsYear == year, !loader.driversCupTabStandings.isEmpty {
+            return loader.driversCupTabStandings
+        }
+        return []
+    }
+
+    /// Drivers — тот же горизонтальный скролл и размер карточек, что у Teams; фото пилота вместо болида.
+    private var driversChampionshipSection: some View {
+        let rows = homeDriverStandingsRows
+        guard !rows.isEmpty else { return AnyView(EmptyView()) }
+        return AnyView(
+            sectionBlock(title: "Drivers") {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .center, spacing: 0) {
+                        ForEach(Array(rows.enumerated()), id: \.element.driverNumber) { index, row in
+                            if index > 0 {
+                                Spacer().frame(width: 12)
+                                Rectangle()
+                                    .fill(Color(.separator))
+                                    .frame(width: 32, height: 2)
+                                Spacer().frame(width: 12)
+                            }
+                            driverChampionshipCard(
+                                fullName: row.fullName,
+                                teamName: row.teamName,
+                                points: row.points,
+                                driverNumber: row.driverNumber
+                            )
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                }
+            }
+        )
+    }
+
     /// Teams — те же карточки что и в Season (горизонтальный скролл, 260×104), внутри название команды
     private var teamsChampionshipSection: some View {
         let teams = loader.championshipTeamsTop
@@ -372,6 +424,100 @@ struct HomeView: View {
         )
         .clipShape(RoundedRectangle(cornerRadius: Self.teamCardCornerRadius))
         .overlay(RoundedRectangle(cornerRadius: Self.teamCardCornerRadius).strokeBorder(Color.white.opacity(0.25), lineWidth: 1))
+    }
+
+    private func splitDriverGivenFamilyForHome(_ fullName: String) -> (given: String, family: String) {
+        let parts = fullName.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard let last = parts.last else { return ("", fullName) }
+        if parts.count == 1 { return ("", last) }
+        return (parts.dropLast().joined(separator: " "), last)
+    }
+
+    /// Номер как на баннере гонщика (`DriverCupShimmerBanner.driverNumberImage`).
+    @ViewBuilder
+    private func homeDriverNumberGlyph(driverNumber: Int) -> some View {
+        let asset = "\(driverNumber)"
+        if UIImage(named: asset) != nil {
+            Image(asset)
+                .resizable()
+                .scaledToFit()
+                .frame(height: 15)
+                .accessibilityLabel("Driver number \(driverNumber)")
+        } else {
+            Text(asset)
+                .font(Font.custom(FontWeight.titilliumWebBold.rawValue, size: 15))
+                .foregroundStyle(.white)
+                .monospacedDigit()
+        }
+    }
+
+    /// Карточка ровно 260×104 как Teams: фото справа целиком внутри скругления, тот же top-aspect кроп (`DriverCupBannerPhotoCrop`), голова в верхней части полосы — ничего не вылезает за карточку.
+    private func driverChampionshipCard(fullName: String, teamName: String, points: Double, driverNumber: Int) -> some View {
+        let tint = teamColor(for: teamName)
+        let parts = splitDriverGivenFamilyForHome(fullName)
+        let cardW = Self.seasonCardWidth
+        let cardH = Self.seasonCardHeight
+        let corner = Self.teamCardCornerRadius
+        let shape = RoundedRectangle(cornerRadius: corner, style: .continuous)
+        let photoW: CGFloat = 102
+        let driverId = String.AppImage.driverIdFromFullName(fullName)
+        let assetName = String.AppImage.driverPhoto(driverId: driverId)
+            ?? String.AppImage.driverPhotoAsset(forFullName: fullName)
+
+        return ZStack(alignment: .bottom) {
+            LinearGradient(colors: [Color.black, tint], startPoint: .top, endPoint: .bottom)
+            Image(String.AppImage.background_element)
+                .resizable()
+                .renderingMode(.template)
+                .scaledToFit()
+                .foregroundStyle(tint)
+                .frame(maxWidth: .infinity)
+                .opacity(0.3)
+        }
+        .frame(width: cardW, height: cardH)
+        .overlay(alignment: .topLeading) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    if !parts.given.isEmpty {
+                        Text(parts.given)
+                            .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 13))
+                    }
+                    Text(parts.family)
+                        .font(Font.custom(FontWeight.titilliumWebBold.rawValue, size: 13))
+                }
+                .foregroundStyle(.white)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+
+                Text("\(formatHomeTeamPoints(points)) pts")
+                    .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 11))
+                    .foregroundStyle(.white.opacity(0.7))
+
+                homeDriverNumberGlyph(driverNumber: driverNumber)
+                    .padding(.top, 6)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .padding(.leading, 12)
+            .padding(.top, 14)
+            .padding(.trailing, photoW + 6)
+            .allowsHitTesting(false)
+        }
+        .overlay(alignment: .bottomTrailing) {
+            Group {
+                if let ui = DriverCupBannerPhotoCrop.uiImageTopAspectFill(named: assetName, width: photoW, height: cardH) {
+                    Image(uiImage: ui)
+                        .interpolation(.high)
+                        .antialiased(true)
+                        .frame(width: photoW, height: cardH, alignment: .top)
+                } else {
+                    Color.clear
+                        .frame(width: photoW, height: cardH)
+                }
+            }
+            .allowsHitTesting(false)
+        }
+        .clipShape(shape)
+        .overlay(shape.strokeBorder(Color.white.opacity(0.25), lineWidth: 1))
     }
 
     private func teamColor(for teamName: String) -> Color {
@@ -540,7 +686,7 @@ struct HomeView: View {
     private static let seasonCardHeight: CGFloat = 104
     private static let teamCardCornerRadius: CGFloat = 24
     private static let heroBlockHeight: CGFloat = 500
-    /// Отступ между блоками Season, Teams, Sessions.
+    /// Отступ между блоками Season, Drivers, Teams, Sessions.
     private static let sectionSpacing: CGFloat = 30
     private static let sectionTitleToContentHeight: CGFloat = 0
 

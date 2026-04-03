@@ -60,12 +60,52 @@ struct DriversCupView: View {
     private static let heroHeight: CGFloat = 300
     private static let heroPhotoWidth: CGFloat = 118
     private static let photoFillOverscan: CGFloat = 2.6
-    /// Герой: флаг/мета-иконки. В списке строк флаг = кегль строки команды (`listRowMetaFontSize`).
     private static let metaIconSide: CGFloat = 20
-    private static let listRowMetaFontSize: CGFloat = 12
+    /// Список под героем: круглый портрет, сгруппированные строки.
+    private static let driversListPhotoDiameter: CGFloat = 38
+    /// Ширина блока «полоска + место» (двузначные номера без переноса).
+    private static let driversListPositionBlockWidth: CGFloat = 58
     private func formatStandingsPoints(_ p: Double) -> String {
         if abs(p - Double(Int(p))) < 0.001 { return "\(Int(p))" }
         return String(format: "%.1f", p)
+    }
+
+    /// Имя титриллиум Regular, фамилия Bold (как на баннере деталки с Northwell для given — только там).
+    private func splitDriverGivenAndFamily(_ fullName: String) -> (given: String, family: String) {
+        let parts = fullName.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard let last = parts.last else { return ("", fullName) }
+        if parts.count == 1 { return ("", last) }
+        return (parts.dropLast().joined(separator: " "), last)
+    }
+
+    @ViewBuilder
+    private func driverNameGivenFamilyLine(fullName: String, size: CGFloat, minimumScale: CGFloat) -> some View {
+        let parts = splitDriverGivenAndFamily(fullName)
+        HStack(spacing: 6) {
+            if !parts.given.isEmpty {
+                Text(parts.given)
+                    .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: size))
+            }
+            Text(parts.family)
+                .font(Font.custom(FontWeight.titilliumWebBold.rawValue, size: size))
+        }
+        .foregroundStyle(.white)
+        .lineLimit(1)
+        .minimumScaleFactor(minimumScale)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var driversCupNavListRows: [DriverCupNavRow] {
+        Array(loader.driversCupTabStandings.dropFirst().map {
+            DriverCupNavRow(
+                position: $0.position,
+                driverNumber: $0.driverNumber,
+                fullName: $0.fullName,
+                teamName: $0.teamName,
+                points: $0.points,
+                countryCode: $0.countryCode
+            )
+        })
     }
 
     var body: some View {
@@ -110,27 +150,19 @@ struct DriversCupView: View {
                                         .buttonStyle(.plain)
                                     }
 
-                                    VStack(spacing: 8) {
-                                        ForEach(
-                                            Array(loader.driversCupTabStandings.dropFirst().map {
-                                                DriverCupNavRow(
-                                                    position: $0.position,
-                                                    driverNumber: $0.driverNumber,
-                                                    fullName: $0.fullName,
-                                                    teamName: $0.teamName,
-                                                    points: $0.points,
-                                                    countryCode: $0.countryCode
-                                                )
-                                            }),
-                                            id: \.driverNumber
-                                        ) { nav in
-                                            driverRowCard(nav: nav)
+                                    VStack(spacing: 0) {
+                                        ForEach(Array(driversCupNavListRows.enumerated()), id: \.1.driverNumber) { index, nav in
+                                            VStack(spacing: 0) {
+                                                driverListRow(nav: nav)
+                                                if index < driversCupNavListRows.count - 1 {
+                                                    driversListRowSeparator
+                                                }
+                                            }
                                         }
                                     }
                                     .padding(.horizontal, 16)
                                     .padding(.top, 0)
-                                    .padding(.bottom, 28)
-                                    .offset(y: -10)
+                                    .padding(.bottom, 20)
                                 }
                             }
                             .scrollIndicators(.hidden)
@@ -204,11 +236,7 @@ struct DriversCupView: View {
                         accentLineHeight: 26
                     )
                     VStack(alignment: .leading, spacing: 12) {
-                        Text(fullName)
-                            .font(Font.custom(FontWeight.titilliumWebBold.rawValue, size: 22))
-                            .foregroundStyle(.white)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.72)
+                        driverNameGivenFamilyLine(fullName: fullName, size: 22, minimumScale: 0.72)
 
                         teamCountryPointsRow(
                             teamName: teamName,
@@ -219,7 +247,8 @@ struct DriversCupView: View {
                             ptsFontSize: 10,
                             ptsHPadding: 11,
                             ptsVPadding: 1,
-                            ptsCornerRadius: 18
+                            ptsCornerRadius: 18,
+                            includeTeamLogo: false
                         )
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -262,54 +291,110 @@ struct DriversCupView: View {
         .allowsHitTesting(false)
     }
 
-    private func driverRowCard(nav: DriverCupNavRow) -> some View {
+    /// Разделитель от левого края списка — с выравниванием по колонке позиции (как у строки).
+    private var driversListRowSeparator: some View {
+        Rectangle()
+            .fill(Color.white.opacity(0.08))
+            .frame(maxWidth: .infinity)
+            .frame(height: 1)
+    }
+
+    /// Спокойный список: одна группа, круглый портрет, вторичная строка «флаг + команда», очки без плашки.
+    private func driverListRow(nav: DriverCupNavRow) -> some View {
         NavigationLink(value: nav) {
-            ZStack(alignment: .topLeading) {
-                HStack(alignment: .top, spacing: 8) {
-                    positionLeadingColumn(position: nav.position, teamName: nav.teamName)
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(nav.fullName)
-                            .font(Font.custom(FontWeight.titilliumWebBold.rawValue, size: 16))
-                            .foregroundStyle(.white)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.8)
-
-                        teamCountryPointsRow(
-                            teamName: nav.teamName,
-                            countryCode: nav.countryCode,
-                            points: nav.points,
-                            iconSide: Self.listRowMetaFontSize,
-                            numberSize: 12,
-                            ptsFontSize: 9,
-                            ptsHPadding: 9,
-                            ptsVPadding: 1,
-                            ptsCornerRadius: 18
-                        )
-                    }
-                    .padding(.trailing, 22)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(alignment: .center, spacing: 12) {
+                HStack(alignment: .center, spacing: 6) {
+                    teamAccentSlash(color: teamAccentSolidColor(for: nav.teamName), lineHeight: 17)
+                    Text("\(nav.position)")
+                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.55))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                        .fixedSize(horizontal: true, vertical: false)
                 }
+                .frame(width: Self.driversListPositionBlockWidth, alignment: .leading)
 
-                HStack {
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 13, weight: .semibold))
+                driverRowThumbnail(fullName: nav.fullName)
+                    .frame(width: Self.driversListPhotoDiameter, height: Self.driversListPhotoDiameter)
+                    .clipShape(Circle())
+                    .overlay(
+                        Circle()
+                            .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.5)
+                    )
+
+                VStack(alignment: .leading, spacing: 4) {
+                    driverNameGivenFamilyLine(fullName: nav.fullName, size: 17, minimumScale: 0.75)
+
+                    driversListMetaRow(countryCode: nav.countryCode, teamName: nav.teamName)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(formatStandingsPoints(nav.points))
+                        .font(.system(size: 18, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    Text("pts")
+                        .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.32))
-                        .fixedSize()
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+                .fixedSize(horizontal: true, vertical: false)
             }
             .padding(.vertical, 12)
-            .padding(.horizontal, 4)
-            .background(Color.black)
-            .overlay(alignment: .bottom) {
-                Rectangle()
-                    .fill(Color.white.opacity(0.12))
-                    .frame(height: 1)
-                    .padding(.leading, 34)
-            }
+            .padding(.horizontal, 16)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    /// Флаг ● лого ● команда (без очков — они справа в колонке).
+    private func driversListMetaRow(countryCode: String, teamName: String) -> some View {
+        let iconSide: CGFloat = 12
+        return HStack(alignment: .center, spacing: 11) {
+            driverCountryFlag(code: countryCode, side: iconSide)
+            if !teamName.isEmpty {
+                metaSeparatorDot
+                if let logo = teamLogoImageName(teamName) {
+                    Image(logo)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 16, height: 16)
+                    metaSeparatorDot
+                }
+                Text(teamName)
+                    .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 12))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+        }
+    }
+
+    /// Миниатюра для строки списка (только известные ассеты — без подстановки чужого фото).
+    private func driverRowThumbnail(fullName: String) -> some View {
+        let name = String.AppImage.driverPhoto(driverId: String.AppImage.driverIdFromFullName(fullName))
+        let side = Self.driversListPhotoDiameter
+        return Group {
+            if let name {
+                Image(name)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: side, height: side * 1.12, alignment: .top)
+                    .frame(width: side, height: side, alignment: .top)
+                    .clipped()
+            } else {
+                Circle()
+                    .fill(Color.white.opacity(0.08))
+                    .overlay {
+                        Image(systemName: "person.fill")
+                            .font(.system(size: max(14, side * 0.42), weight: .medium))
+                            .foregroundStyle(.white.opacity(0.28))
+                    }
+            }
+        }
     }
 
     /// Полоска + цифра слева; в герое кегль как у ФИО (`digitSize` 22).
@@ -334,10 +419,7 @@ struct DriversCupView: View {
 
     /// Один сплошной цвет «снизу» градиента команды (`start` при направлении снизу вверх).
     private func teamAccentSolidColor(for teamName: String) -> Color {
-        if let g = Color.AppColors.teamGradient(for: teamName) {
-            return g.start
-        }
-        return teamColor(for: teamName)
+        Color.AppColors.teamGradientBottomColor(for: teamName)
     }
 
     /// Наклонная полоска; `lineHeight` в паре с кеглем цифры (герой — выше).
@@ -361,14 +443,22 @@ struct DriversCupView: View {
         ptsFontSize: CGFloat,
         ptsHPadding: CGFloat,
         ptsVPadding: CGFloat,
-        ptsCornerRadius: CGFloat
+        ptsCornerRadius: CGFloat,
+        includeTeamLogo: Bool = false
     ) -> some View {
-        // Порядок: флаг страны ● название команды ● очки (PTS).
+        // Порядок: флаг ● [лого] ● команда ● очки (в списке — лого команды как в референсах F1-app).
         HStack(alignment: .center, spacing: 11) {
             driverCountryFlag(code: countryCode, side: iconSide)
 
             if !teamName.isEmpty {
                 metaSeparatorDot
+                if includeTeamLogo, let logo = teamLogoImageName(teamName) {
+                    Image(logo)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 18, height: 18)
+                    metaSeparatorDot
+                }
                 Text(teamName)
                     .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 12))
                     .foregroundStyle(.white)
@@ -488,7 +578,7 @@ struct DriversCupView: View {
 }
 
 /// Клип баннера: лейаут и отрисовка не ниже низа карточки; вверх — зона вылета головы (как маска в виджете).
-private struct DriverCupBannerTopBleedClipShape: Shape {
+struct DriverCupBannerTopBleedClipShape: Shape {
     private let bleedUp: CGFloat = 900
     func path(in rect: CGRect) -> Path {
         Path(CGRect(x: rect.minX, y: rect.minY - bleedUp, width: rect.width, height: bleedUp + rect.height))
@@ -496,7 +586,7 @@ private struct DriverCupBannerTopBleedClipShape: Shape {
 }
 
 /// Тот же кроп, что `WidgetBundledImage.portraitTopAlignedFill`: aspect-fill от **верха** PNG, без «центрирования» SwiftUI.
-private enum DriverCupBannerPhotoCrop {
+enum DriverCupBannerPhotoCrop {
     private static var rasterScale: CGFloat {
         max(UIScreen.main.scale, 2.0)
     }
@@ -625,7 +715,7 @@ private struct DriverCupShimmerBanner: View {
                     if !teamName.isEmpty {
                         Text(teamName)
                             .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 13))
-                            .foregroundStyle(.white.opacity(0.88))
+                            .foregroundStyle(.white)
                             .lineLimit(2)
                             .minimumScaleFactor(0.82)
                     }

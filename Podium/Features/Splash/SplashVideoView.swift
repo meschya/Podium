@@ -17,6 +17,8 @@ private let splashVideoExtension = "mov"
 struct SplashVideoView: View {
     /// Режим заполнения: true = aspect fill (обрезает по краям), false = aspect fit.
     var aspectFill: Bool = true
+    /// На полноэкранном фоне — `true`; в уменьшенной рамке родитель задаёт размер без bleed.
+    var ignoresSafeArea: Bool = true
 
     var body: some View {
         SplashVideoUIView(
@@ -24,7 +26,19 @@ struct SplashVideoView: View {
             resourceExtension: splashVideoExtension,
             aspectFill: aspectFill
         )
-        .ignoresSafeArea()
+        .modifier(ConditionalIgnoreSafeArea(enabled: ignoresSafeArea))
+    }
+}
+
+private struct ConditionalIgnoreSafeArea: ViewModifier {
+    var enabled: Bool
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if enabled {
+            content.ignoresSafeArea()
+        } else {
+            content
+        }
     }
 }
 

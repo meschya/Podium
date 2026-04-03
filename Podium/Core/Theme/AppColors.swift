@@ -60,5 +60,27 @@ extension Color {
             }
             return nil
         }
+
+        /// Нижний стоп градиента команды (`start` в `teamGradient`, направление снизу вверх в Podium). Без градиента — фирменный однотонный.
+        static func teamGradientBottomColor(for teamName: String) -> Color {
+            if let g = teamGradient(for: teamName) { return g.start }
+            return teamSolidBrandColor(for: teamName)
+        }
+
+        private static func teamSolidBrandColor(for teamName: String) -> Color {
+            let lower = teamName.lowercased()
+            if lower.contains("red bull"), !lower.contains("racing bulls") { return redBull }
+            if lower.contains("racing bulls") || lower.contains("rb ") || lower == "rb" { return racingBulls }
+            if lower.contains("ferrari") { return ferrari }
+            if lower.contains("mclaren") { return mclaren }
+            if lower.contains("mercedes") { return mercedes }
+            if lower.contains("aston martin") { return astonMartin }
+            if lower.contains("alpine") { return alpine }
+            if lower.contains("williams") { return williams }
+            if lower.contains("haas") || lower.contains("sauber") || lower.contains("kick") { return haas }
+            if lower.contains("audi") { return audi }
+            if lower.contains("cadillac") { return cadillac }
+            return Color.white.opacity(0.75)
+        }
     }
 }
