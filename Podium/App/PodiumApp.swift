@@ -13,7 +13,7 @@ struct PodiumApp: App {
             ZStack {
                 Color.black.ignoresSafeArea()
 
-                if seasonLoader.isLoaded {
+                if seasonLoader.isPresentationReady {
                     MainView()
                         .environmentObject(seasonLoader)
                         .environmentObject(seasonLoader.liveMapState)
@@ -29,13 +29,13 @@ struct PodiumApp: App {
                         showSplash = false
                     }
                 })
-                // Пока нет isLoaded — всегда показываем слой сплэша (иначе при сбое состояния окно остаётся пустым/чёрным).
+                // Пока нет готового bootstrap — слой сплэша; `isPresentationReady` поднимается после полного набора данных.
                 .opacity(
-                    seasonLoader.isLoaded
+                    seasonLoader.isPresentationReady
                         ? (showSplash ? splashOpacity : 0)
                         : 1
                 )
-                .allowsHitTesting(showSplash && (!seasonLoader.isLoaded || splashOpacity > 0.01))
+                .allowsHitTesting(showSplash && (!seasonLoader.isPresentationReady || splashOpacity > 0.01))
                 .ignoresSafeArea()
             }
             .animation(.easeOut(duration: transitionDuration), value: splashOpacity)
@@ -43,6 +43,7 @@ struct PodiumApp: App {
             .task {
                 await seasonLoader.load()
                 await seasonLoader.finalizeBootstrapIfIncomplete()
+                await seasonLoader.awaitPresentationReadyOrTimeout(seconds: 14)
             }
         }
     }

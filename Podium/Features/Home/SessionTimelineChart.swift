@@ -105,7 +105,7 @@ struct SessionTimelineChart: View {
         let lineHeight = contentHeight - 22
         return VStack(alignment: .center, spacing: 0) {
             Text(dayHeaderShort(dayStart, timeZone: calendar.timeZone))
-                .font(Font.custom(FontWeight.titilliumWebSemiBold.rawValue, size: 13))
+                .font(Font.custom(FontWeight.outfitSemiBold.rawValue, size: 13))
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 6)
                 .frame(maxWidth: .infinity)
@@ -155,7 +155,7 @@ struct SessionTimelineChart: View {
             ForEach(0..<hourCount, id: \.self) { i in
                 let h = calendar.date(byAdding: .hour, value: i, to: start) ?? start
                 Text(timeLabel(h, timeZone: calendar.timeZone))
-                    .font(.system(size: 11, weight: .medium))
+                    .font(Font.custom(FontWeight.outfitRegular.rawValue, size: 11))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
                     // Линии сетки на полосе стоят у верхнего края каждого часа (y = 0, hourHeight, …).
@@ -302,10 +302,7 @@ private struct TimelineSessionStripUIViewRepresentable: UIViewRepresentable {
             hourLineHeight: hourLineHeight,
             timeZone: timeZone
         )
-        DispatchQueue.main.async {
-            uiView.setNeedsLayout()
-            uiView.layoutIfNeeded()
-        }
+        uiView.setNeedsLayout()
     }
 }
 
@@ -381,6 +378,8 @@ private final class TimelineUIKitBlockView: UIView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
+        // Родитель задаёт frame; не смешиваем с Auto Layout по краям (см. layoutSubviews у stack).
+        translatesAutoresizingMaskIntoConstraints = true
         layer.cornerRadius = 8
         layer.masksToBounds = true
         backgroundColor = UIColor(red: 180 / 255, green: 50 / 255, blue: 50 / 255, alpha: 0.2)
@@ -401,24 +400,26 @@ private final class TimelineUIKitBlockView: UIView {
         stack.alignment = .fill
         stack.spacing = 2
         stack.distribution = .fill
-        stack.translatesAutoresizingMaskIntoConstraints = false
+        // Только ручные frame из layoutSubviews: иначе при frame с родителя (SwiftUI/UIKit) ловим
+        // NSAutoresizingMaskLayoutConstraint height/width == 0 против NSLayoutConstraint — лаг и спам в консоль.
+        stack.translatesAutoresizingMaskIntoConstraints = true
+        stack.autoresizingMask = []
         stack.addArrangedSubview(titleLabel)
         stack.addArrangedSubview(timeLabel)
         stack.addArrangedSubview(tailSpacer)
 
         addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: topAnchor, constant: 4),
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            stack.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -4),
-        ])
     }
 
     required init?(coder: NSCoder) { nil }
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        let w = bounds.width
+        let h = bounds.height
+        let pad: CGFloat = 8
+        let topPad: CGFloat = 4
+        stack.frame = CGRect(x: pad, y: topPad, width: max(0, w - pad * 2), height: max(0, h - topPad - 4))
         applyCompactLayoutIfNeeded()
     }
 
@@ -441,12 +442,12 @@ private final class TimelineUIKitBlockView: UIView {
         let h = bounds.height
         guard h > 0, lastItem != nil else { return }
 
-        let tit = UIFont(name: FontWeight.titilliumWebSemiBold.rawValue, size: 13)
-            ?? .systemFont(ofSize: 13, weight: .semibold)
-        let titSmall = UIFont(name: FontWeight.titilliumWebSemiBold.rawValue, size: 11)
+        let sessionTitleFont = UIFont(name: FontWeight.outfitSemiBold.rawValue, size: 13)
+        ?? .systemFont(ofSize: 13, weight: .semibold)
+        let sessionTitleFontCompact = UIFont(name: FontWeight.outfitSemiBold.rawValue, size: 11)
             ?? .systemFont(ofSize: 11, weight: .semibold)
-        let timeNormal = UIFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
-        let timeSmall = UIFont.monospacedDigitSystemFont(ofSize: 9, weight: .medium)
+        let timeNormal = UIFont(name: FontWeight.outfitRegular.rawValue, size: 11) ?? .systemFont(ofSize: 11, weight: .regular)
+        let timeSmall = UIFont(name: FontWeight.outfitRegular.rawValue, size: 9) ?? .systemFont(ofSize: 9, weight: .regular)
 
         titleLabel.isHidden = false
         timeLabel.isHidden = false
@@ -467,7 +468,7 @@ private final class TimelineUIKitBlockView: UIView {
             timeLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
             timeLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-            titleLabel.font = tit
+            titleLabel.font = sessionTitleFont
             titleLabel.numberOfLines = 2
             timeLabel.font = timeNormal
             titleLabel.adjustsFontSizeToFitWidth = true
@@ -489,12 +490,12 @@ private final class TimelineUIKitBlockView: UIView {
             timeLabel.numberOfLines = 1
 
             if h < 22 {
-                titleLabel.font = titSmall
+                titleLabel.font = sessionTitleFontCompact
                 timeLabel.font = timeSmall
                 titleLabel.minimumScaleFactor = 0.7
                 timeLabel.minimumScaleFactor = 0.65
             } else {
-                titleLabel.font = titSmall
+                titleLabel.font = sessionTitleFontCompact
                 timeLabel.font = timeSmall
                 titleLabel.minimumScaleFactor = 0.75
                 timeLabel.minimumScaleFactor = 0.7

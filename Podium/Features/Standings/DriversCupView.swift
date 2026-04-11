@@ -63,14 +63,14 @@ struct DriversCupView: View {
     private static let metaIconSide: CGFloat = 20
     /// Список под героем: круглый портрет, сгруппированные строки.
     private static let driversListPhotoDiameter: CGFloat = 38
-    /// Ширина блока «полоска + место» (двузначные номера без переноса).
-    private static let driversListPositionBlockWidth: CGFloat = 58
+    /// Ширина блока «полоска + место» (двузначные без переноса; без лишнего зазора до круга).
+    private static let driversListPositionBlockWidth: CGFloat = 50
     private func formatStandingsPoints(_ p: Double) -> String {
         if abs(p - Double(Int(p))) < 0.001 { return "\(Int(p))" }
         return String(format: "%.1f", p)
     }
 
-    /// Имя титриллиум Regular, фамилия Bold (как на баннере деталки с Northwell для given — только там).
+    /// Имя Outfit Regular, фамилия Bold (как на баннере деталки с Northwell для given — только там).
     private func splitDriverGivenAndFamily(_ fullName: String) -> (given: String, family: String) {
         let parts = fullName.split(whereSeparator: \.isWhitespace).map(String.init)
         guard let last = parts.last else { return ("", fullName) }
@@ -84,10 +84,10 @@ struct DriversCupView: View {
         HStack(spacing: 6) {
             if !parts.given.isEmpty {
                 Text(parts.given)
-                    .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: size))
+                    .font(Font.custom(FontWeight.outfitRegular.rawValue, size: size))
             }
             Text(parts.family)
-                .font(Font.custom(FontWeight.titilliumWebBold.rawValue, size: size))
+                .font(Font.custom(FontWeight.outfitBold.rawValue, size: size))
         }
         .foregroundStyle(.white)
         .lineLimit(1)
@@ -302,7 +302,7 @@ struct DriversCupView: View {
     /// Спокойный список: одна группа, круглый портрет, вторичная строка «флаг + команда», очки без плашки.
     private func driverListRow(nav: DriverCupNavRow) -> some View {
         NavigationLink(value: nav) {
-            HStack(alignment: .center, spacing: 12) {
+            HStack(alignment: .center, spacing: 6) {
                 HStack(alignment: .center, spacing: 6) {
                     teamAccentSlash(color: teamAccentSolidColor(for: nav.teamName), lineHeight: 17)
                     Text("\(nav.position)")
@@ -365,7 +365,7 @@ struct DriversCupView: View {
                     metaSeparatorDot
                 }
                 Text(teamName)
-                    .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 12))
+                    .font(Font.custom(FontWeight.outfitRegular.rawValue, size: 12))
                     .foregroundStyle(.white)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
@@ -409,7 +409,7 @@ struct DriversCupView: View {
             Text("\(position)")
                 .font(
                     digitSize >= 20
-                        ? Font.custom(FontWeight.titilliumWebBold.rawValue, size: digitSize)
+                        ? Font.custom(FontWeight.outfitBold.rawValue, size: digitSize)
                         : Font.system(size: digitSize, weight: .bold, design: .rounded)
                 )
                 .foregroundStyle(.white)
@@ -460,7 +460,7 @@ struct DriversCupView: View {
                     metaSeparatorDot
                 }
                 Text(teamName)
-                    .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 12))
+                    .font(Font.custom(FontWeight.outfitRegular.rawValue, size: 12))
                     .foregroundStyle(.white)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
@@ -496,12 +496,12 @@ struct DriversCupView: View {
     ) -> some View {
         HStack(spacing: 5) {
             Text(formatStandingsPoints(points))
-                .font(Font.custom(FontWeight.titilliumWebBold.rawValue, size: numberSize))
+                .font(Font.custom(FontWeight.outfitBold.rawValue, size: numberSize))
                 .foregroundStyle(.white)
                 .monospacedDigit()
 
             Text("PTS")
-                .font(Font.custom(FontWeight.titilliumWebBold.rawValue, size: ptsFontSize))
+                .font(Font.custom(FontWeight.outfitBold.rawValue, size: ptsFontSize))
                 .foregroundStyle(.black)
                 .padding(.horizontal, ptsHPadding)
                 .padding(.vertical, ptsVPadding)
@@ -696,7 +696,7 @@ private struct DriverCupShimmerBanner: View {
                                     .minimumScaleFactor(0.72)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                 Text(nameParts.family)
-                                    .font(Font.custom(FontWeight.titilliumWebBold.rawValue, size: 18))
+                                    .font(Font.custom(FontWeight.outfitBold.rawValue, size: 18))
                                     .foregroundStyle(.white)
                                     .lineLimit(1)
                                     .minimumScaleFactor(0.75)
@@ -705,7 +705,7 @@ private struct DriverCupShimmerBanner: View {
                             }
                         } else {
                             Text(nameParts.family)
-                                .font(Font.custom(FontWeight.titilliumWebBold.rawValue, size: 18))
+                                .font(Font.custom(FontWeight.outfitBold.rawValue, size: 18))
                                 .foregroundStyle(.white)
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.75)
@@ -714,7 +714,7 @@ private struct DriverCupShimmerBanner: View {
 
                     if !teamName.isEmpty {
                         Text(teamName)
-                            .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 13))
+                            .font(Font.custom(FontWeight.outfitRegular.rawValue, size: 13))
                             .foregroundStyle(.white)
                             .lineLimit(2)
                             .minimumScaleFactor(0.82)
@@ -771,7 +771,7 @@ private struct DriverCupShimmerBanner: View {
                 .accessibilityLabel("Driver number \(driverNumber)")
         } else {
             Text(asset)
-                .font(Font.custom(FontWeight.titilliumWebBold.rawValue, size: 17))
+                .font(Font.custom(FontWeight.outfitBold.rawValue, size: 17))
                 .foregroundStyle(.white)
                 .monospacedDigit()
         }
@@ -1095,11 +1095,11 @@ private struct DriverCupSummaryTable: View {
         if let label, let value {
             VStack(alignment: .leading, spacing: 2) {
                 Text(label)
-                    .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 11))
+                    .font(Font.custom(FontWeight.outfitRegular.rawValue, size: 11))
                     .foregroundStyle(.white.opacity(0.62))
                     .lineLimit(1)
                 Text("\(value)")
-                    .font(Font.custom(FontWeight.titilliumWebBlack.rawValue, size: 20))
+                    .font(Font.custom(FontWeight.outfitBlack.rawValue, size: 20))
                     .foregroundStyle(.white)
                     .monospacedDigit()
                     .contentTransition(.numericText())
@@ -1178,12 +1178,12 @@ private struct DriverCupDetailStatsRow: View {
                 statCard {
                     HStack(alignment: .lastTextBaseline, spacing: 6) {
                         Text("\(seasonYear)")
-                            .font(Font.custom(FontWeight.titilliumWebBlack.rawValue, size: 30))
+                            .font(Font.custom(FontWeight.outfitBlack.rawValue, size: 30))
                             .foregroundStyle(.white)
                             .monospacedDigit()
                             .lineLimit(1)
                         Text("SEASON")
-                            .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 13))
+                            .font(Font.custom(FontWeight.outfitRegular.rawValue, size: 13))
                             .foregroundStyle(.white.opacity(0.9))
                             .lineLimit(1)
                     }
@@ -1194,14 +1194,14 @@ private struct DriverCupDetailStatsRow: View {
                 statCard {
                     HStack(alignment: .lastTextBaseline, spacing: 6) {
                         Text(shownPosition > 0 ? "\(shownPosition)" : "-")
-                            .font(Font.custom(FontWeight.titilliumWebBlack.rawValue, size: 28))
+                            .font(Font.custom(FontWeight.outfitBlack.rawValue, size: 28))
                             .foregroundStyle(.white)
                             .monospacedDigit()
                             .lineLimit(1)
                             .contentTransition(.numericText())
                             .animation(.easeOut(duration: 0.14), value: shownPosition)
                         Text("POS")
-                            .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 13))
+                            .font(Font.custom(FontWeight.outfitRegular.rawValue, size: 13))
                             .foregroundStyle(.white.opacity(0.9))
                             .lineLimit(1)
                     }
@@ -1212,14 +1212,14 @@ private struct DriverCupDetailStatsRow: View {
                 statCard {
                     HStack(alignment: .lastTextBaseline, spacing: 6) {
                         Text(shownPoints > 0 ? "\(shownPoints)" : "0")
-                            .font(Font.custom(FontWeight.titilliumWebBlack.rawValue, size: 28))
+                            .font(Font.custom(FontWeight.outfitBlack.rawValue, size: 28))
                             .foregroundStyle(.white)
                             .monospacedDigit()
                             .lineLimit(1)
                             .contentTransition(.numericText())
                             .animation(.easeOut(duration: 0.14), value: shownPoints)
                         Text("PTS")
-                            .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 13))
+                            .font(Font.custom(FontWeight.outfitRegular.rawValue, size: 13))
                             .foregroundStyle(.white.opacity(0.9))
                             .lineLimit(1)
                     }

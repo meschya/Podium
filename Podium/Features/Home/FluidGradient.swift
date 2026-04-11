@@ -2,243 +2,171 @@
 //  FluidGradient.swift
 //  Podium
 //
-//  Fluid gradient via CoreAnimation (Cindori style).
-//  https://cindori.com/developer/animated-gradient
-//  https://cindori.com/developer/animated-gradient-2
-//
+//  Лёгкий фон: один линейный CAGradientLayer + одна медленная CA-анимация (autoreverses).
+//  Раньше — несколько радиальных блобов + Combine-таймеры → лаги скролла и после splash.
 
-import Combine
 import SwiftUI
 import UIKit
-import QuartzCore
 
+// MARK: - UIKit
 
-// MARK: - CGPoint helpers
-private extension CGPoint {
-    func displace(by point: CGPoint = .zero) -> CGPoint {
-        CGPoint(x: x + point.x, y: y + point.y)
-    }
-    func capped() -> CGPoint {
-        CGPoint(x: max(0, min(1, x)), y: max(0, min(1, y)))
-    }
-}
+private final class StableFluidGradientView: UIView {
+    private let gradient = CAGradientLayer()
+    private var lastFingerprint: String = ""
 
-// MARK: - ResizableLayer
-private final class ResizableLayer: CALayer {
-    override init() {
-        super.init()
-        sublayers = []
-    }
-    override init(layer: Any) {
-        super.init(layer: layer)
-    }
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-    override func layoutSublayers() {
-        super.layoutSublayers()
-        sublayers?.forEach { $0.frame = bounds }
-    }
-}
-
-// MARK: - BlobLayer (radial gradient blob)
-private final class BlobLayer: CAGradientLayer {
-    init(color: UIColor) {
-        super.init()
-        type = .radial
-        let position = newPosition()
-        startPoint = position
-        let radius = newRadius()
-        endPoint = position.displace(by: radius)
-        set(color: color)
-    }
-    override init(layer: Any) {
-        super.init(layer: layer)
-    }
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-    func set(color: UIColor) {
-        colors = [color.cgColor, color.cgColor, color.withAlphaComponent(0).cgColor]
-        locations = [0.0, 0.9, 1.0] as [NSNumber]
-    }
-    /// Позиции смещены вправо — анимация по большей части справа.
-    func newPosition() -> CGPoint {
-        let x = CGFloat.random(in: 0.4...1)
-        let y = CGFloat.random(in: 0...1)
-        return CGPoint(x: min(1, max(0, x)), y: min(1, max(0, y)))
-    }
-    func newRadius() -> CGPoint {
-        let size = CGFloat.random(in: 0.15...0.75)
-        let h = max(frame.height, 1)
-        let w = frame.width
-        let viewRatio = w / h
-        let safeRatio = viewRatio.isNaN ? 1 : max(viewRatio, 0.25)
-        let ratio = safeRatio * CGFloat.random(in: 0.25...1.75)
-        return CGPoint(x: size, y: size * ratio)
-    }
-    func animate(speed: CGFloat) {
-        guard speed > 0 else { return }
-        removeAllAnimations()
-        let current = presentation() ?? self
-        let position = newPosition()
-        let radius = newRadius()
-        let duration = 2.8 / Double(speed)
-        let timing = CAMediaTimingFunction(name: .easeInEaseOut)
-        let start = CABasicAnimation(keyPath: "startPoint")
-        start.fromValue = current.startPoint
-        start.toValue = position
-        start.duration = duration
-        start.timingFunction = timing
-        start.isRemovedOnCompletion = false
-        start.fillMode = .forwards
-        let end = CABasicAnimation(keyPath: "endPoint")
-        end.fromValue = current.endPoint
-        end.toValue = position.displace(by: radius)
-        end.duration = duration
-        end.timingFunction = timing
-        end.isRemovedOnCompletion = false
-        end.fillMode = .forwards
-        let newOpacity = Float.random(in: 0.5...1)
-        let opacityAnim = CABasicAnimation(keyPath: "opacity")
-        opacityAnim.fromValue = current.opacity
-        opacityAnim.toValue = newOpacity
-        opacityAnim.duration = duration
-        opacityAnim.timingFunction = timing
-        opacityAnim.isRemovedOnCompletion = false
-        opacityAnim.fillMode = .forwards
-        startPoint = position
-        endPoint = position.displace(by: radius)
-        opacity = newOpacity
-        add(start, forKey: "startPoint")
-        add(end, forKey: "endPoint")
-        add(opacityAnim, forKey: "opacity")
-    }
-}
-
-// MARK: - Delegate
-private protocol FluidGradientDelegate: AnyObject {
-    func updateBlur(_ value: CGFloat)
-}
-
-// MARK: - FluidGradientNativeView (UIKit)
-private final class FluidGradientNativeView: UIView {
-    private let baseLayer = ResizableLayer()
-    private var speed: CGFloat = 1
-    private var cancellables = Set<AnyCancellable>()
-    weak var delegate: FluidGradientDelegate?
     override init(frame: CGRect) {
         super.init(frame: frame)
-        layer.addSublayer(baseLayer)
+        gradient.type = .axial
+        gradient.contentsScale = UIScreen.main.scale
+        layer.addSublayer(gradient)
     }
+
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
+
     override func layoutSubviews() {
         super.layoutSubviews()
-        baseLayer.frame = bounds
-        baseLayer.layoutSublayers()
-        updateBlur()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        gradient.frame = bounds
+        CATransaction.commit()
     }
-    private func updateBlur() {
-        delegate?.updateBlur(min(bounds.width, bounds.height))
+
+    func apply(blobs: [UIColor], speed: CGFloat) {
+        let fp = fingerprint(blobs: blobs, speed: speed)
+        guard fp != lastFingerprint else { return }
+        lastFingerprint = fp
+
+        gradient.removeAllAnimations()
+
+        let stops = Self.linearStops(from: blobs)
+        gradient.colors = stops.cgColors
+        gradient.locations = stops.locations
+        backgroundColor = stops.backdrop
+
+        let sp = CGPoint(x: 0.18, y: 0.02)
+        let ep = CGPoint(x: 0.82, y: 0.98)
+        gradient.startPoint = sp
+        gradient.endPoint = ep
+
+        guard speed > 0.02 else { return }
+
+        // Длинный цикл — стабильно и дёшево для композитора.
+        let duration = CFTimeInterval(min(40, max(16, 26 / max(0.2, Double(speed)))))
+        let spEnd = CGPoint(x: 0.42, y: 0.12)
+        let epEnd = CGPoint(x: 0.58, y: 0.88)
+
+        let aStart = CABasicAnimation(keyPath: "startPoint")
+        aStart.fromValue = NSValue(cgPoint: sp)
+        aStart.toValue = NSValue(cgPoint: spEnd)
+        aStart.duration = duration
+        aStart.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+
+        let aEnd = CABasicAnimation(keyPath: "endPoint")
+        aEnd.fromValue = NSValue(cgPoint: ep)
+        aEnd.toValue = NSValue(cgPoint: epEnd)
+        aEnd.duration = duration
+        aEnd.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+
+        let group = CAAnimationGroup()
+        group.animations = [aStart, aEnd]
+        group.duration = duration
+        group.autoreverses = true
+        group.repeatCount = .greatestFiniteMagnitude
+        group.isRemovedOnCompletion = false
+        gradient.add(group, forKey: "stableDrift")
     }
-    func create(colors: [UIColor], layer target: CALayer) {
-        let count = target.sublayers?.count ?? 0
-        let toRemove = count - colors.count
-        if toRemove > 0 {
-            target.sublayers?.removeLast(toRemove)
+
+    private func fingerprint(blobs: [UIColor], speed: CGFloat) -> String {
+        "\(blobs.count)_\(String(format: "%.2f", speed))_" + blobs.prefix(6).map { $0.rgbaKey }.joined(separator: "|")
+    }
+
+    private struct LinearStops {
+        let cgColors: [CGColor]
+        let locations: [NSNumber]
+        let backdrop: UIColor
+    }
+
+    private static func linearStops(from blobs: [UIColor]) -> LinearStops {
+        var u = blobs
+        if u.isEmpty {
+            u = [
+                UIColor(red: 0.12, green: 0.12, blue: 0.16, alpha: 1),
+                UIColor(red: 0.06, green: 0.06, blue: 0.09, alpha: 1)
+            ]
         }
-        for (i, color) in colors.enumerated() {
-            if i < count, let blob = target.sublayers?[i] as? BlobLayer {
-                blob.set(color: color)
-            } else {
-                target.addSublayer(BlobLayer(color: color))
-            }
+        while u.count < 2 {
+            u.append(u[0])
         }
+        let c0 = u[0]
+        let c1 = u[min(1, u.count - 1)]
+        let c2 = u.count > 2 ? u[2] : blend(c1, towards: .black, amount: 0.35)
+        let c3 = u.count > 3 ? u[3] : blend(c2, towards: .black, amount: 0.5)
+        let cgColors: [CGColor] = [
+            c0.cgColor,
+            c1.cgColor,
+            c2.cgColor,
+            blend(c3, towards: .black, amount: 0.25).cgColor
+        ]
+        let locations: [NSNumber] = [0, 0.38, 0.68, 1]
+        let backdrop = blend(c0, towards: .black, amount: 0.55)
+        return LinearStops(cgColors: cgColors, locations: locations, backdrop: backdrop)
     }
-    func setBlobs(_ colors: [UIColor]) {
-        create(colors: colors, layer: baseLayer)
-        update(speed: speed)
-    }
-    func update(speed: CGFloat) {
-        cancellables.removeAll()
-        self.speed = speed
-        guard speed > 0 else { return }
-        let layers = baseLayer.sublayers ?? []
-        for layer in layers {
-            guard let blob = layer as? BlobLayer else { continue }
-            Timer.publish(every: .random(in: (2.2 / speed)...(3.2 / speed)), on: .main, in: .common)
-                .autoconnect()
-                .sink { [weak blob, weak self] _ in
-                    guard let self, let blob else { return }
-                    blob.animate(speed: self.speed)
-                }
-                .store(in: &cancellables)
-        }
+
+    private static func blend(_ a: UIColor, towards b: UIColor, amount: CGFloat) -> UIColor {
+        var r1: CGFloat = 0, g1: CGFloat = 0, b1: CGFloat = 0, a1: CGFloat = 0
+        var r2: CGFloat = 0, g2: CGFloat = 0, b2: CGFloat = 0, a2: CGFloat = 0
+        guard a.getRed(&r1, green: &g1, blue: &b1, alpha: &a1),
+              b.getRed(&r2, green: &g2, blue: &b2, alpha: &a2) else { return a }
+        let t = max(0, min(1, amount))
+        return UIColor(
+            red: r1 + (r2 - r1) * t,
+            green: g1 + (g2 - g1) * t,
+            blue: b1 + (b2 - b1) * t,
+            alpha: a1 + (a2 - a1) * t
+        )
     }
 }
 
-// MARK: - FluidGradient (SwiftUI)
+private extension UIColor {
+    var rgbaKey: String {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        guard getRed(&r, green: &g, blue: &b, alpha: &a) else { return "x" }
+        return String(format: "%.3f,%.3f,%.3f,%.3f", r, g, b, a)
+    }
+}
+
+// MARK: - SwiftUI
+
 struct FluidGradient: View {
     private let blobs: [UIColor]
-    private let blurExponent: CGFloat
     private let speed: CGFloat
-    @State private var blurValue: CGFloat = 0
+
+    /// `blur` оставлен в сигнатуре для совместимости вызовов (игнорируется).
     init(blobs: [UIColor], blur: CGFloat = 0.75, speed: CGFloat = 1) {
         self.blobs = blobs
-        self.blurExponent = blur
         self.speed = speed
     }
+
     var body: some View {
-        FluidGradientRepresentable(
-            blobs: blobs,
-            speed: speed,
-            blurValue: $blurValue
-        )
-        .blur(radius: pow(max(blurValue, 1), blurExponent))
-        .clipped()
-        .accessibilityHidden(true)
+        FluidGradientRepresentable(blobs: blobs, speed: speed)
+            .clipped()
+            .accessibilityHidden(true)
     }
 }
 
-// MARK: - UIViewRepresentable
 private struct FluidGradientRepresentable: UIViewRepresentable {
     var blobs: [UIColor]
     var speed: CGFloat
-    @Binding var blurValue: CGFloat
-    func makeUIView(context: Context) -> FluidGradientNativeView {
-        let view = FluidGradientNativeView()
-        view.delegate = context.coordinator
-        context.coordinator.view = view
-        view.setBlobs(blobs)
-        DispatchQueue.main.async {
-            view.update(speed: speed)
-        }
-        return view
+
+    func makeUIView(context: Context) -> StableFluidGradientView {
+        let v = StableFluidGradientView()
+        v.apply(blobs: blobs, speed: speed)
+        return v
     }
-    func updateUIView(_ view: FluidGradientNativeView, context: Context) {
-        view.setBlobs(blobs)
-        context.coordinator.update(speed: speed)
-    }
-    func makeCoordinator() -> Coordinator {
-        Coordinator(blurValue: $blurValue, speed: speed)
-    }
-    final class Coordinator: FluidGradientDelegate {
-        var view: FluidGradientNativeView!
-        @Binding var blurValue: CGFloat
-        var speed: CGFloat
-        init(blurValue: Binding<CGFloat>, speed: CGFloat) {
-            _blurValue = blurValue
-            self.speed = speed
-        }
-        func updateBlur(_ value: CGFloat) {
-            blurValue = value
-        }
-        func update(speed: CGFloat) {
-            guard speed != self.speed else { return }
-            self.speed = speed
-            view.update(speed: speed)
-        }
+
+    func updateUIView(_ uiView: StableFluidGradientView, context: Context) {
+        uiView.apply(blobs: blobs, speed: speed)
     }
 }

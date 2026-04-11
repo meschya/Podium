@@ -1,5 +1,7 @@
 import SwiftUI
 
+/// Сплэш не ходит в API: анимация и `loader.isPresentationReady` (полный bootstrap). Сеть — `SeasonDataLoader.load()` в `PodiumApp` (`.task`).
+
 /// URL видео сплэша в бандле. Если файл не добавлен — nil, тогда показывается статичный контент (полоски).
 private let splashVideoURL = Bundle.main.url(forResource: "splash_background", withExtension: "mov")
 
@@ -8,7 +10,7 @@ struct SplashScreenView: View {
     var onFinish: () -> Void
 
     @State private var startTime: Date?
-    /// После `isLoaded` лоадер остаётся на экране, пока не истечёт пауза — за это время `MainView` успевает смонтироваться без рывка.
+    /// После готовности данных лоадер остаётся на экране, пока не истечёт пауза — `MainView` успевает смонтироваться и отдать первый layout.
     @State private var keepLoaderVisibleAfterLoad = false
     @State private var hasScheduledSplashEnd = false
 
@@ -17,8 +19,9 @@ struct SplashScreenView: View {
     private let postLoadSettleDuration: TimeInterval = 0.55
     private let stagger: CGFloat = 0.15
 
+    /// Пока идёт загрузка — реже тикаем, чтобы не грузить рендер 60×/с под анимацией.
     private var timelineInterval: TimeInterval {
-        loader.isLoaded ? 1.0 : 1.0 / 60
+        loader.isPresentationReady ? 1.0 : 1.0 / 24
     }
 
     var body: some View {
@@ -53,19 +56,13 @@ struct SplashScreenView: View {
                     }
                     VStack(spacing: 0) {
                         Spacer(minLength: 0)
-                        HStack(spacing: 12) {
-                            Text("Podium")
-                                .font(Font.custom(FontWeight.nastonRegular.rawValue, size: 52))
-                                .foregroundStyle(.white)
-                            Image(String.AppImage.f1_logo)
-                                .resizable()
-                                .scaledToFit()
-                                .frame(height: 28)
-                        }
+                        Text("Podium")
+                            .font(Font.custom(FontWeight.nastonRegular.rawValue, size: 52))
+                            .foregroundStyle(.white)
                         .opacity(podium)
                         .scaleEffect(0.92 + 0.08 * podium)
                         Text("Races, standings and results — all in one place.")
-                            .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 15))
+                            .font(Font.custom(FontWeight.outfitRegular.rawValue, size: 15))
                             .foregroundStyle(.white.opacity(0.7))
                             .multilineTextAlignment(.center)
                             .lineSpacing(0)
@@ -73,7 +70,7 @@ struct SplashScreenView: View {
                             .padding(.top, 12)
                             .opacity(podium)
                         Spacer().frame(height: 28)
-                        if !loader.isLoaded || keepLoaderVisibleAfterLoad {
+                        if !loader.isPresentationReady || keepLoaderVisibleAfterLoad {
                             SplashLoaderView()
                                 .opacity(podium)
                         }
@@ -84,22 +81,23 @@ struct SplashScreenView: View {
             }
             .onAppear {
                 if startTime == nil { startTime = Date() }
-                if loader.isLoaded { keepLoaderVisibleAfterLoad = true }
+                if loader.isPresentationReady { keepLoaderVisibleAfterLoad = true }
                 scheduleSplashEndAfterSettle()
             }
-            .onChange(of: loader.isLoaded) { _, isLoaded in
-                if isLoaded { keepLoaderVisibleAfterLoad = true }
+            .onChange(of: loader.isPresentationReady) { _, ready in
+                if ready { keepLoaderVisibleAfterLoad = true }
                 scheduleSplashEndAfterSettle()
             }
         }
     }
 
     private func scheduleSplashEndAfterSettle() {
-        guard loader.isLoaded, !hasScheduledSplashEnd else { return }
+        guard loader.isPresentationReady, !hasScheduledSplashEnd else { return }
         hasScheduledSplashEnd = true
         DispatchQueue.main.asyncAfter(deadline: .now() + postLoadSettleDuration) {
-            // Один кадр отдаём под layout главного экрана перед fade.
-            DispatchQueue.main.async {
+            Task { @MainActor in
+                await Task.yield()
+                await Task.yield()
                 onFinish()
             }
         }

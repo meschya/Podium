@@ -5,13 +5,13 @@
 	<key>UIAppFonts</key>
 	<array>
 		<string>naston-regular.ttf</string>
-		<string>TitilliumWeb-Black.ttf</string>
-		<string>TitilliumWeb-Bold.ttf</string>
-		<string>TitilliumWeb-ExtraLight.ttf</string>
-		<string>TitilliumWeb-Light.ttf</string>
+		<string>Outfit-Black.ttf</string>
+		<string>Outfit-Bold.ttf</string>
+		<string>Outfit-ExtraLight.ttf</string>
+		<string>Outfit-Light.ttf</string>
 		<string>Northwell-Alt.ttf</string>
-		<string>TitilliumWeb-Regular.ttf</string>
-		<string>TitilliumWeb-SemiBold.ttf</string>
+		<string>Outfit-Regular.ttf</string>
+		<string>Outfit-SemiBold.ttf</string>
 	</array>
 </dict>
 </plist>

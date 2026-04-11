@@ -10,6 +10,8 @@ struct CircuitInfo: Codable {
     var x: [Int]
     var y: [Int]
     var rotation: Double?
+    /// Pre-computed normalized path; populated once after decoding via `precomputePathPoints()`.
+    var cachedNormalizedPath: [(CGFloat, CGFloat)]?
 
     enum CodingKeys: String, CodingKey {
         case x, y
@@ -27,6 +29,13 @@ struct CircuitInfo: Codable {
         } else {
             rotation = nil
         }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(x, forKey: .x)
+        try c.encode(y, forKey: .y)
+        try c.encodeIfPresent(rotation, forKey: .rotation)
     }
 
     init(x: [Int], y: [Int], rotation: Double?) {
@@ -198,10 +207,15 @@ struct CircuitInfo: Codable {
     }
 
     func normalizedPathPoints() -> [(CGFloat, CGFloat)] {
+        if let cached = cachedNormalizedPath { return cached }
         let pts = rotatedPoints()
         let b = bounds
         let spanX = b.maxX - b.minX, spanY = b.maxY - b.minY
         guard spanX > 0, spanY > 0 else { return [(0.5, 0.5)] }
         return pts.map { (CGFloat(($0.0 - b.minX) / spanX), CGFloat(($0.1 - b.minY) / spanY)) }
+    }
+
+    mutating func precomputePathPoints() {
+        cachedNormalizedPath = normalizedPathPoints()
     }
 }

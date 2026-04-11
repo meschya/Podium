@@ -3,15 +3,13 @@
 //  Podium
 //
 
-import SafariServices
 import SwiftUI
 import UIKit
 
 struct HomeView: View {
     @EnvironmentObject var loader: SeasonDataLoader
-    @State private var newsURLInApp: IdentifiableURL?
-    @State private var showHeroCircuitMap = false
-    @State private var heroCircuitPathPoints: [(CGFloat, CGFloat)]?
+    /// UIKit SessionTimeline — после первых кадров, чтобы не рвать scroll.
+    @State private var showCircuitHeavyHomeRows = false
 
     private var headerDate: String {
         let f = DateFormatter()
@@ -20,69 +18,46 @@ struct HomeView: View {
         return f.string(from: Date())
     }
 
-    private func formatHomeTeamPoints(_ p: Double) -> String {
-        if abs(p - Double(Int(p))) < 0.001 { return "\(Int(p))" }
-        return String(format: "%.1f", p)
-    }
-
     var body: some View {
         NavigationStack {
             GeometryReader { geo in
                 let safeTop = geo.safeAreaInsets.top
-            ZStack {
-                Color.black.ignoresSafeArea()
-                ScrollView(showsIndicators: false) {
-                    VStack(spacing: 0) {
-                        ZStack(alignment: .top) {
-                                heroGradientSection(safeAreaTop: safeTop)
-                            VStack(spacing: 0) {
-                                    topBar(safeAreaTop: safeTop)
-                                grandPrixInfoBar
-                                    HStack(alignment: .center, spacing: 16) {
-                                        // Текст героя всегда — раньше он был скрыт вместе с картой до showHeroCircuitMap,
-                                        // из‑за этого казалось, что «данных нет».
-                                        HomeHeroLeftContentView()
-                                        Spacer(minLength: 12)
-                                        if showHeroCircuitMap { heroCircuitMapView }
+                ZStack {
+                    Color.black.ignoresSafeArea()
+                    ScrollView(showsIndicators: false) {
+                        VStack(spacing: 0) {
+                            heroBanner(safeAreaTop: safeTop)
+                                .frame(height: Self.heroBlockHeight)
+                                .clipped()
+                            // VStack: первая ячейка с Leader не откладывается на следующий кадр, в отличие от LazyVStack.
+                            VStack(spacing: Self.sectionSpacing) {
+                                VStack(alignment: .leading, spacing: 0) {
+                                    Text("Leader")
+                                        .font(Font.custom(FontWeight.outfitSemiBold.rawValue, size: 20))
+                                        .foregroundStyle(.white.opacity(0.92))
+                                    HomeChampionshipStatsGrid()
+                                        .padding(.top, 16)
+                                }
+                                .padding(.horizontal, 20)
+                                if showCircuitHeavyHomeRows {
+                                    sessionScheduleSection
+                                }
                             }
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                    .padding(.top, -70)
+                            .padding(.horizontal, 0)
+                            .padding(.top, -56)
                         }
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            }
-                            .frame(height: Self.heroBlockHeight)
-                        .clipped()
-
-                        VStack(spacing: Self.sectionSpacing) {
-                            upcomingRacesSection
-                                .padding(.top, -50)
-                                .zIndex(1)
-                            driversChampionshipSection
-                                .zIndex(1)
-                            teamsChampionshipSection
-                                .zIndex(1)
-                            sessionScheduleSection
-                            fiaNewsSection
-                        }
-                        .padding(.horizontal, 0)
+                        .padding(.bottom, 24)
                     }
-                    .padding(.bottom, 24)
+                    .ignoresSafeArea(edges: .top)
                 }
-                .ignoresSafeArea(edges: .top)
             }
             }
             // Иначе GeometryReader в NavigationStack часто схлопывается по высоте до 0 — виден только чёрный фон.
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .sheet(item: $newsURLInApp) { wrap in
-                SafariView(url: wrap.url) { newsURLInApp = nil }
-            }
             .navigationBarHidden(true)
             .task {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                    showHeroCircuitMap = true
-                }
-            }
-            .task {
+                await Task.yield()
+                guard !Task.isCancelled else { return }
                 let year = Calendar.current.component(.year, from: Date())
                 guard loader.selectedSeasonYear == year else { return }
                 if loader.championshipDriverStandings.isEmpty,
@@ -106,74 +81,47 @@ struct HomeView: View {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                 }
             }
-            .onAppear { loader.isHeroSectionVisible = true }
-            .onDisappear { loader.isHeroSectionVisible = false }
-        }
-    }
-
-    private var raceInfoSection: some View {
-        VStack(spacing: 8) {
-            if loader.isLoading && !loader.isLoaded {
-                ProgressView()
-                    .padding(.vertical, 24)
-            } else if let m = loader.meeting {
-                TrackMapView(circuitInfo: loader.circuitInfo, imageURL: m.circuitImage)
-                    .frame(maxWidth: 200)
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 10)
-
-                Text(circuitDisplayName(m))
-                    .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 12))
-                    .foregroundStyle(.secondary)
-
-                HStack(spacing: 6) {
-                    flagView(countryCode: m.countryCode)
-                    Text(m.meetingName)
-                        .font(Font.custom(FontWeight.titilliumWebSemiBold.rawValue, size: 16))
-                        .multilineTextAlignment(.center)
-                }
-                .frame(maxWidth: .infinity, alignment: .center)
-                Text(m.location)
-                    .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 13))
-                    .foregroundStyle(.secondary)
-                if let start = m.parsedDateStart, let end = m.parsedDateEnd {
-                    Text(formattedDateRange(start: start, end: end))
-                        .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 12))
-                        .foregroundStyle(.secondary)
-                }
-                if let start = m.parsedDateStart, start > Date() {
-                    countdownView(to: start, showLabel: true, meetingName: m.meetingName)
-                        .padding(.top, 6)
-                        .padding(.bottom, 10)
-                }
-            } else {
-                Text("No upcoming race")
-                    .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 14))
-                    .foregroundStyle(.secondary)
-                    .padding(.vertical, 24)
+            .task {
+                await Task.yield()
+                guard !Task.isCancelled else { return }
+                showCircuitHeavyHomeRows = true
             }
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity)
-        .background(cardBackground)
-        .overlay(
-            RoundedRectangle(cornerRadius: 20)
-                .strokeBorder(cardBorder, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 20))
-        .padding(.horizontal, 20)
+            .onAppear {
+                loader.isHeroSectionVisible = true
+            }
+            .onDisappear { loader.isHeroSectionVisible = false }
     }
 
-    /// Hero: градиент в цветах флага страны гран-при (country_code / country_name из API).
-    private func heroGradientSection(safeAreaTop: CGFloat) -> some View {
-        let code = heroGradientCountryCode()
-        let colors = flagColorsForGradient(countryCode: code)
-        return ZStack {
-            FluidGradient(blobs: colors, blur: 0.75, speed: 0.6)
-            BottomDarkeningOverlay()
+    /// Герой: флаг-градиент + затемнение снизу; весь блок в одном ScrollView — скроллится вместе с контентом.
+    private func heroBanner(safeAreaTop: CGFloat) -> some View {
+        ZStack(alignment: .top) {
+            heroGradientStack
+            VStack(spacing: 0) {
+                topBar(safeAreaTop: safeAreaTop)
+                grandPrixInfoBar
+                HStack(alignment: .center, spacing: 16) {
+                    HomeHeroLeftContentView()
+                    Spacer(minLength: 12)
+                    if loader.meeting != nil { heroCircuitMapView }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.top, -70)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
+    }
+
+    private var heroGradientStack: some View {
+        let alpha2 = loader.meeting.map { alpha2CountryCode($0.countryCode) } ?? "GB"
+        return ZStack {
+            LinearGradient(
+                colors: Self.heroFlagGradientColors(alpha2: alpha2),
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            BottomDarkeningOverlay()
+        }
     }
 
     private func topBar(safeAreaTop: CGFloat) -> some View {
@@ -181,13 +129,9 @@ struct HomeView: View {
             Text("Podium")
                 .font(Font.custom(FontWeight.nastonRegular.rawValue, size: 22))
                 .foregroundStyle(.white)
-            Image(String.AppImage.f1_logo)
-                .resizable()
-                .scaledToFit()
-                .frame(height: 20)
             Spacer()
             Text(headerDate)
-                .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 15))
+                .font(Font.custom(FontWeight.outfitRegular.rawValue, size: 15))
                 .foregroundStyle(.white.opacity(0.9))
         }
         .padding(.horizontal, 20)
@@ -215,12 +159,12 @@ struct HomeView: View {
     private func heroCountryCell(countryName: String, countryCode: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("Country")
-                .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 12))
+                .font(Font.custom(FontWeight.outfitRegular.rawValue, size: 12))
                 .foregroundStyle(.white.opacity(0.7))
             HStack(spacing: 4) {
                 heroFlagView(countryCode: countryCode)
                 Text(countryName)
-                    .font(Font.custom(FontWeight.titilliumWebSemiBold.rawValue, size: 15))
+                    .font(Font.custom(FontWeight.outfitSemiBold.rawValue, size: 15))
                     .foregroundStyle(.white)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
@@ -248,10 +192,10 @@ struct HomeView: View {
     private func heroInfoCell(label: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label)
-                .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 12))
+                .font(Font.custom(FontWeight.outfitRegular.rawValue, size: 12))
                 .foregroundStyle(.white.opacity(0.7))
             Text(value)
-                .font(Font.custom(FontWeight.titilliumWebSemiBold.rawValue, size: 15))
+                .font(Font.custom(FontWeight.outfitSemiBold.rawValue, size: 15))
                 .foregroundStyle(.white)
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
@@ -271,297 +215,51 @@ struct HomeView: View {
         return names[code] ?? m.location
     }
 
-    private func heroDateString(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.dateFormat = "EEE d MMM yyyy"
-        f.locale = Locale(identifier: "en_US_POSIX")
-        return f.string(from: date)
+    private func heroTrackLocalAssetName(for m: OpenF1Meeting) -> String? {
+        String.AppImage.trackImage(circuitName: m.circuitShortName)
+            ?? String.AppImage.trackImage(circuitName: m.location)
+    }
+
+    /// Стабильный ключ: при появлении `circuitInfo` после splash пересобираем карту, иначе SwiftUI иногда не обновляет слой контура.
+    private func heroTrackMapIdentity(meetingKey: Int, circuit: CircuitInfo?) -> String {
+        let n = circuit.map { min($0.x.count, $0.y.count) } ?? 0
+        return "\(meetingKey)-\(n)"
     }
 
     private var heroCircuitMapView: some View {
         Group {
             if let m = loader.meeting {
-                HeroCircuitMapWithDotsView(
-                    circuitInfo: loader.circuitInfo,
-                    meeting: m,
-                    localTrackImageName: String.AppImage.trackImage(circuitName: m.circuitShortName)
-                        ?? String.AppImage.trackImage(circuitName: m.location)
-                )
-            }
-        }
-        .fixedSize(horizontal: true, vertical: true)
-        .padding(.trailing, 20)
-        .allowsHitTesting(false)
-    }
-
-    private var upcomingRacesSection: some View {
-        SeasonSectionView()
-    }
-
-    /// Пилоты для карточек на главной: сначала bootstrap, иначе таблица кубка за текущий год.
-    private var homeDriverStandingsRows: [(position: Int, driverNumber: Int, fullName: String, teamName: String, points: Double, countryCode: String)] {
-        let year = Calendar.current.component(.year, from: Date())
-        if !loader.championshipDriverStandings.isEmpty {
-            return loader.championshipDriverStandings
-        }
-        if loader.driversCupTabStandingsYear == year, !loader.driversCupTabStandings.isEmpty {
-            return loader.driversCupTabStandings
-        }
-        return []
-    }
-
-    /// Drivers — тот же горизонтальный скролл и размер карточек, что у Teams; фото пилота вместо болида.
-    private var driversChampionshipSection: some View {
-        let rows = homeDriverStandingsRows
-        guard !rows.isEmpty else { return AnyView(EmptyView()) }
-        return AnyView(
-            sectionBlock(title: "Drivers") {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(alignment: .center, spacing: 0) {
-                        ForEach(Array(rows.enumerated()), id: \.element.driverNumber) { index, row in
-                            if index > 0 {
-                                Spacer().frame(width: 12)
-                                Rectangle()
-                                    .fill(Color(.separator))
-                                    .frame(width: 32, height: 2)
-                                Spacer().frame(width: 12)
-                            }
-                            driverChampionshipCard(
-                                fullName: row.fullName,
-                                teamName: row.teamName,
-                                points: row.points,
-                                driverNumber: row.driverNumber
-                            )
-                        }
-                    }
-                    .padding(.horizontal, 20)
-                }
-            }
-        )
-    }
-
-    /// Teams — те же карточки что и в Season (горизонтальный скролл, 260×104), внутри название команды
-    private var teamsChampionshipSection: some View {
-        let teams = loader.championshipTeamsTop
-        guard !teams.isEmpty else { return AnyView(EmptyView()) }
-        return AnyView(
-            sectionBlock(title: "Teams") {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(alignment: .center, spacing: 0) {
-                        ForEach(Array(teams.enumerated()), id: \.offset) { index, row in
-                            if index > 0 {
-                                Spacer().frame(width: 12)
-                                Rectangle()
-                                    .fill(Color(.separator))
-                                    .frame(width: 32, height: 2)
-                                Spacer().frame(width: 12)
-                            }
-                            teamCard(position: row.position, name: row.name, points: Double(row.points))
-                        }
-                    }
-                    .padding(.horizontal, 20)
-                }
-            }
-        )
-    }
-
-    private func teamCard(position: Int, name: String, points: Double) -> some View {
-        let logoName = teamLogoImageName(name)
-        let bolidName = TeamBolidAssetName.resolve(name)
-        let tint = teamColor(for: name)
-        return VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(cleanTeamName(name))
-                        .font(Font.custom(FontWeight.titilliumWebSemiBold.rawValue, size: 13))
-                        .foregroundStyle(.white)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                    Text("\(formatHomeTeamPoints(points)) pts")
-                        .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 11))
-                        .foregroundStyle(.white.opacity(0.7))
-                }
-                Spacer(minLength: 8)
-                ZStack {
-                    Circle()
-                        .fill(tint)
-                    if let logoName = logoName {
-                        Image(logoName)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: 16, height: 16)
-                    }
-                }
-                .frame(width: 30, height: 30)
-            }
-            .padding(.leading, 12)
-            .padding(.trailing, 12)
-            .padding(.top, 14)
-            Spacer(minLength: 0)
-        }
-        .frame(width: Self.seasonCardWidth, height: Self.seasonCardHeight)
-        .background(
-            ZStack(alignment: .bottom) {
-                LinearGradient(colors: [Color.black, tint], startPoint: .top, endPoint: .bottom)
-                Image(String.AppImage.background_element)
-                    .resizable()
-                    .renderingMode(.template)
-                    .scaledToFit()
-                    .foregroundStyle(tint)
-                    .frame(maxWidth: .infinity)
-                    .opacity(0.3)
-                HStack(alignment: .bottom, spacing: 0) {
-                    Image(bolidName)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxWidth: 200)
-                        .scaleEffect(1.0, anchor: .bottom)
-                    Spacer(minLength: 0)
-                }
-                .padding(.leading, 12)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-            }
-        )
-        .clipShape(RoundedRectangle(cornerRadius: Self.teamCardCornerRadius))
-        .overlay(RoundedRectangle(cornerRadius: Self.teamCardCornerRadius).strokeBorder(Color.white.opacity(0.25), lineWidth: 1))
-    }
-
-    private func splitDriverGivenFamilyForHome(_ fullName: String) -> (given: String, family: String) {
-        let parts = fullName.split(whereSeparator: \.isWhitespace).map(String.init)
-        guard let last = parts.last else { return ("", fullName) }
-        if parts.count == 1 { return ("", last) }
-        return (parts.dropLast().joined(separator: " "), last)
-    }
-
-    /// Номер как на баннере гонщика (`DriverCupShimmerBanner.driverNumberImage`).
-    @ViewBuilder
-    private func homeDriverNumberGlyph(driverNumber: Int) -> some View {
-        let asset = "\(driverNumber)"
-        if UIImage(named: asset) != nil {
-            Image(asset)
-                .resizable()
-                .scaledToFit()
-                .frame(height: 15)
-                .accessibilityLabel("Driver number \(driverNumber)")
-        } else {
-            Text(asset)
-                .font(Font.custom(FontWeight.titilliumWebBold.rawValue, size: 15))
-                .foregroundStyle(.white)
-                .monospacedDigit()
-        }
-    }
-
-    /// Карточка ровно 260×104 как Teams: фото справа целиком внутри скругления, тот же top-aspect кроп (`DriverCupBannerPhotoCrop`), голова в верхней части полосы — ничего не вылезает за карточку.
-    private func driverChampionshipCard(fullName: String, teamName: String, points: Double, driverNumber: Int) -> some View {
-        let tint = teamColor(for: teamName)
-        let parts = splitDriverGivenFamilyForHome(fullName)
-        let cardW = Self.seasonCardWidth
-        let cardH = Self.seasonCardHeight
-        let corner = Self.teamCardCornerRadius
-        let shape = RoundedRectangle(cornerRadius: corner, style: .continuous)
-        let photoW: CGFloat = 102
-        let driverId = String.AppImage.driverIdFromFullName(fullName)
-        let assetName = String.AppImage.driverPhoto(driverId: driverId)
-            ?? String.AppImage.driverPhotoAsset(forFullName: fullName)
-
-        return ZStack(alignment: .bottom) {
-            LinearGradient(colors: [Color.black, tint], startPoint: .top, endPoint: .bottom)
-            Image(String.AppImage.background_element)
-                .resizable()
-                .renderingMode(.template)
-                .scaledToFit()
-                .foregroundStyle(tint)
-                .frame(maxWidth: .infinity)
-                .opacity(0.3)
-        }
-        .frame(width: cardW, height: cardH)
-        .overlay(alignment: .topLeading) {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    if !parts.given.isEmpty {
-                        Text(parts.given)
-                            .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 13))
-                    }
-                    Text(parts.family)
-                        .font(Font.custom(FontWeight.titilliumWebBold.rawValue, size: 13))
-                }
-                .foregroundStyle(.white)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-
-                Text("\(formatHomeTeamPoints(points)) pts")
-                    .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 11))
-                    .foregroundStyle(.white.opacity(0.7))
-
-                homeDriverNumberGlyph(driverNumber: driverNumber)
-                    .padding(.top, 6)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .padding(.leading, 12)
-            .padding(.top, 14)
-            .padding(.trailing, photoW + 6)
-            .allowsHitTesting(false)
-        }
-        .overlay(alignment: .bottomTrailing) {
-            Group {
-                if let ui = DriverCupBannerPhotoCrop.uiImageTopAspectFill(named: assetName, width: photoW, height: cardH) {
-                    Image(uiImage: ui)
-                        .interpolation(.high)
-                        .antialiased(true)
-                        .frame(width: photoW, height: cardH, alignment: .top)
+                let trackLocal = heroTrackLocalAssetName(for: m)
+                if loader.liveStreamStarted, loader.currentLiveSessionKey() != nil {
+                    HeroCircuitMapWithDotsView(
+                        circuitInfo: loader.circuitInfo,
+                        meeting: m,
+                        localTrackImageName: trackLocal
+                    )
+                    .fixedSize(horizontal: true, vertical: true)
+                    .padding(.trailing, 20)
+                    .allowsHitTesting(false)
                 } else {
-                    Color.clear
-                        .frame(width: photoW, height: cardH)
+                    // Герой: сначала вектор OpenF1 (та же сетка, что у live-точек), затем ассет трассы. `circuit_image` у meeting часто промо, не схема — не показываем.
+                    TrackMapView(
+                        circuitInfo: loader.circuitInfo,
+                        imageURL: nil,
+                        localTrackImageName: trackLocal,
+                        compact: true,
+                        compactSize: CGSize(width: 208, height: 130),
+                        preferRasterTrackInCompact: false,
+                        strokeColor: .white,
+                        cardBackground: .clear
+                    )
+                    .frame(width: 208, height: 130)
+                    .fixedSize(horizontal: true, vertical: true)
+                    .id(heroTrackMapIdentity(meetingKey: m.meetingKey, circuit: loader.circuitInfo))
+                    .padding(.trailing, 20)
+                    .allowsHitTesting(false)
+                    .onAppear { loader.unregisterLiveDotsView() }
                 }
             }
-            .allowsHitTesting(false)
         }
-        .clipShape(shape)
-        .overlay(shape.strokeBorder(Color.white.opacity(0.25), lineWidth: 1))
-    }
-
-    private func teamColor(for teamName: String) -> Color {
-        let lower = teamName.lowercased()
-        if lower.contains("red bull") && !lower.contains("racing bulls") { return Color.AppColors.redBull }
-        if lower.contains("racing bulls") || lower.contains("rb ") || lower == "rb" { return Color.AppColors.racingBulls }
-        if lower.contains("ferrari") { return Color.AppColors.ferrari }
-        if lower.contains("mclaren") { return Color.AppColors.mclaren }
-        if lower.contains("mercedes") { return Color.AppColors.mercedes }
-        if lower.contains("aston martin") { return Color.AppColors.astonMartin }
-        if lower.contains("alpine") { return Color.AppColors.alpine }
-        if lower.contains("williams") { return Color.AppColors.williams }
-        if lower.contains("haas") { return Color.AppColors.haas }
-        if lower.contains("sauber") || lower.contains("kick") { return Color.AppColors.haas }
-        if lower.contains("audi") { return Color.AppColors.audi }
-        if lower.contains("cadillac") { return Color.AppColors.cadillac }
-        return cardBackground
-    }
-
-    private func cleanTeamName(_ raw: String) -> String {
-        var s = raw
-        for prefix in ["Formula 1 ", "F1 ", "Formula One "] {
-            if s.hasPrefix(prefix) { s = String(s.dropFirst(prefix.count)); break }
-        }
-        if s.hasSuffix(" Team") { s = String(s.dropLast(5)) }
-        if s.hasSuffix(" F1 Team") { s = String(s.dropLast(8)) }
-        return s.trimmingCharacters(in: .whitespaces)
-    }
-
-    private func teamLogoImageName(_ teamName: String) -> String? {
-        let lower = teamName.lowercased()
-        if lower.contains("red bull") && !lower.contains("racing bulls") { return String.AppImage.redbullracing_logo }
-        if lower.contains("racing bulls") || lower.contains("rb ") || lower == "rb" { return String.AppImage.racingbulls_logo }
-        if lower.contains("ferrari") { return String.AppImage.ferrari_logo }
-        if lower.contains("mclaren") { return String.AppImage.mclaren_logo }
-        if lower.contains("mercedes") { return String.AppImage.mercedes_logo }
-        if lower.contains("aston martin") { return String.AppImage.astonmartin_logo }
-        if lower.contains("alpine") { return String.AppImage.alpine_logo }
-        if lower.contains("williams") { return String.AppImage.williams_logo }
-        if lower.contains("haas") { return String.AppImage.haas_logo }
-        if lower.contains("sauber") || lower.contains("kick") { return String.AppImage.haas_logo }
-        if lower.contains("audi") { return String.AppImage.audi_logo }
-        if lower.contains("cadillac") { return String.AppImage.cadillac_logo }
-        return nil
     }
 
     private var sessionScheduleSection: some View {
@@ -575,201 +273,50 @@ struct HomeView: View {
         )
     }
 
-    private func sessionShortName(_ name: String) -> String {
-        let lower = name.lowercased()
-        if lower.contains("practice") || lower.contains("fp") {
-            if lower.contains("1") { return "FP1" }
-            if lower.contains("2") { return "FP2" }
-            if lower.contains("3") { return "FP3" }
-            return "FP"
-        }
-        if lower.contains("qualifying") || lower.contains("quali") { return "Quali" }
-        if lower.contains("race") { return "Race" }
-        if lower.contains("sprint") { return "Sprint" }
-        return name
-    }
-
-    private func formatSessionDate(_ dateString: String?) -> String {
-        guard let s = dateString, !s.isEmpty else { return "—" }
-        let iso = ISO8601DateFormatter()
-        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        var date = iso.date(from: s)
-        if date == nil {
-            iso.formatOptions = [.withInternetDateTime]
-            date = iso.date(from: s)
-        }
-        if date == nil {
-            let f = DateFormatter()
-            f.dateFormat = "yyyy-MM-dd"
-            f.timeZone = TimeZone(identifier: "UTC")
-            date = f.date(from: s)
-        }
-        guard let date = date else { return s }
-        let out = DateFormatter()
-        out.dateFormat = "EEE d MMM, HH:mm"
-        out.locale = Locale(identifier: "en_US_POSIX")
-        return out.string(from: date)
-    }
-
-    private func sessionDateParts(_ dateString: String?) -> (date: String, time: String) {
-        guard let s = dateString, !s.isEmpty else { return ("—", "—") }
-        let iso = ISO8601DateFormatter()
-        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        var date = iso.date(from: s)
-        if date == nil {
-            iso.formatOptions = [.withInternetDateTime]
-            date = iso.date(from: s)
-        }
-        if date == nil {
-            let f = DateFormatter()
-            f.dateFormat = "yyyy-MM-dd"
-            f.timeZone = TimeZone(identifier: "UTC")
-            date = f.date(from: s)
-        }
-        guard let date = date else { return (s, "") }
-        let outDate = DateFormatter()
-        outDate.locale = Locale(identifier: "en_US_POSIX")
-        outDate.timeZone = .current
-        outDate.dateFormat = "EEE d MMM"
-        let outTime = DateFormatter()
-        outTime.locale = Locale(identifier: "en_US_POSIX")
-        outTime.timeZone = .current
-        outTime.dateFormat = "HH:mm"
-        return (outDate.string(from: date), outTime.string(from: date))
-    }
-
-    private func sectionHeader(title: String, systemImage: String?, subtitle: String?) -> some View {
-        HStack(spacing: 10) {
-            if let systemImage {
-                Image(systemName: systemImage)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Color.AppColors.accentBlue)
-                    .frame(width: 28, height: 28)
-                    .background(Color.AppColors.accentBlue.opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(Font.custom(FontWeight.nastonRegular.rawValue, size: 20))
-                if let subtitle {
-                    Text(subtitle)
-                        .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 12))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            Spacer()
+    /// Два стопа под `LinearGradient` героя (страна ГП).
+    private static func heroFlagGradientColors(alpha2: String) -> [Color] {
+        switch alpha2 {
+        case "BH": return [Color(red: 0.86, green: 0.16, blue: 0.22), Color(red: 0.12, green: 0.05, blue: 0.08)]
+        case "SA": return [Color(red: 0.1, green: 0.42, blue: 0.22), Color(red: 0.04, green: 0.14, blue: 0.1)]
+        case "AU": return [Color(red: 0.05, green: 0.12, blue: 0.35), Color(red: 0.75, green: 0.12, blue: 0.18)]
+        case "JP": return [Color(red: 0.72, green: 0.12, blue: 0.2), Color(red: 0.08, green: 0.06, blue: 0.22)]
+        case "CN": return [Color(red: 0.82, green: 0.14, blue: 0.12), Color(red: 0.1, green: 0.05, blue: 0.06)]
+        case "US": return [Color(red: 0.08, green: 0.14, blue: 0.38), Color(red: 0.55, green: 0.1, blue: 0.16)]
+        case "IT": return [Color(red: 0.06, green: 0.32, blue: 0.16), Color(red: 0.55, green: 0.12, blue: 0.14)]
+        case "MC": return [Color(red: 0.14, green: 0.22, blue: 0.52), Color(red: 0.62, green: 0.14, blue: 0.18)]
+        case "CA": return [Color(red: 0.78, green: 0.14, blue: 0.16), Color(red: 0.08, green: 0.12, blue: 0.32)]
+        case "ES": return [Color(red: 0.75, green: 0.55, blue: 0.08), Color(red: 0.12, green: 0.08, blue: 0.28)]
+        case "AT": return [Color(red: 0.72, green: 0.1, blue: 0.12), Color(red: 0.12, green: 0.06, blue: 0.18)]
+        case "GB": return [Color(red: 0.06, green: 0.14, blue: 0.42), Color(red: 0.52, green: 0.08, blue: 0.14)]
+        case "HU": return [Color(red: 0.12, green: 0.38, blue: 0.18), Color(red: 0.62, green: 0.14, blue: 0.12)]
+        case "BE": return [Color(red: 0.1, green: 0.1, blue: 0.12), Color(red: 0.72, green: 0.12, blue: 0.14)]
+        case "NL": return [Color(red: 0.1, green: 0.22, blue: 0.62), Color(red: 0.78, green: 0.5, blue: 0.08)]
+        case "FR": return [Color(red: 0.12, green: 0.2, blue: 0.55), Color(red: 0.62, green: 0.14, blue: 0.22)]
+        case "SG": return [Color(red: 0.72, green: 0.12, blue: 0.18), Color(red: 0.06, green: 0.18, blue: 0.42)]
+        case "MX": return [Color(red: 0.08, green: 0.38, blue: 0.2), Color(red: 0.68, green: 0.14, blue: 0.12)]
+        case "BR": return [Color(red: 0.06, green: 0.32, blue: 0.14), Color(red: 0.72, green: 0.55, blue: 0.08)]
+        case "AE": return [Color(red: 0.06, green: 0.28, blue: 0.22), Color(red: 0.55, green: 0.42, blue: 0.1)]
+        case "QA": return [Color(red: 0.52, green: 0.08, blue: 0.28), Color(red: 0.08, green: 0.14, blue: 0.42)]
+        case "AZ": return [Color(red: 0.12, green: 0.42, blue: 0.62), Color(red: 0.72, green: 0.2, blue: 0.12)]
+        default:
+            return [Color(red: 0.11, green: 0.12, blue: 0.2), Color(red: 0.05, green: 0.06, blue: 0.12)]
         }
     }
 
-    // MARK: - FIA News
-    private var fiaNewsSection: some View {
-        guard !loader.fiaNews.isEmpty else { return AnyView(EmptyView()) }
-        return AnyView(
-            sectionBlock(title: "FIA News") {
-                VStack(alignment: .leading, spacing: 12) {
-                    ForEach(loader.fiaNews.prefix(10)) { item in
-                        FIANewsCard(item: item) { url in
-                            newsURLInApp = IdentifiableURL(url: url)
-                        }
-                    }
-                }
-                .padding(.horizontal, 20)
-            }
-        )
-    }
-
-    private var upcomingMeetings: [OpenF1Meeting] {
-        loader.seasonMeetings.filter { !$0.meetingName.lowercased().contains("test") }
-    }
-
-    private static let seasonCardWidth: CGFloat = 260
-    private static let seasonCardHeight: CGFloat = 104
-    private static let teamCardCornerRadius: CGFloat = 24
-    private static let heroBlockHeight: CGFloat = 500
-    /// Отступ между блоками Season, Drivers, Teams, Sessions.
+    private static let heroBlockHeight: CGFloat = 430
+    /// Отступ между блоком статистики чемпионата и сессиями.
     private static let sectionSpacing: CGFloat = 30
-    private static let sectionTitleToContentHeight: CGFloat = 0
 
     /// Секция: заголовок и контент без зазора (слиплены).
     private func sectionBlock<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title)
-                .font(Font.custom(FontWeight.nastonRegular.rawValue, size: 22))
+                .font(Font.custom(FontWeight.outfitSemiBold.rawValue, size: 20))
+                .foregroundStyle(.white.opacity(0.92))
                 .padding(.horizontal, 20)
             content()
                 .padding(.top, 16)
         }
-    }
-
-    private var cardBackground: Color {
-        Color(.secondarySystemGroupedBackground)
-    }
-
-    private var cardBorder: Color {
-        Color(.separator).opacity(0.8)
-    }
-
-    private func countdownView(to date: Date, showLabel: Bool = false, meetingName: String? = nil) -> some View {
-        TimelineView(.periodic(from: .now, by: 1.0)) { context in
-            let c = countdownComponents(from: context.date, to: date)
-            VStack(spacing: showLabel ? 4 : 8) {
-            HStack(spacing: 8) {
-                countdownBlock(value: c.days, label: "days")
-                countdownBlock(value: c.hours, label: "hrs")
-                countdownBlock(value: c.minutes, label: "min")
-                countdownBlock(value: c.seconds, label: "sec")
-                }
-                if showLabel, let meetingName = meetingName {
-                    HStack(spacing: 2) {
-                        Text("until ")
-                            .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 11))
-                            .foregroundStyle(.white.opacity(0.8))
-                        Text(meetingName)
-                            .font(Font.custom(FontWeight.titilliumWebSemiBold.rawValue, size: 11))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6))
-                    }
-                }
-            }
-        }
-    }
-
-    private func countdownBlock(value: Int, label: String) -> some View {
-        VStack(spacing: 4) {
-            Text(String(format: "%02d", value))
-                .font(Font.custom(FontWeight.titilliumWebSemiBold.rawValue, size: 13))
-                .monospacedDigit()
-                .foregroundStyle(.primary)
-            Text(label)
-                .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 9))
-                .foregroundStyle(.secondary)
-        }
-        .frame(minWidth: 28)
-        .padding(.vertical, 8)
-        .padding(.horizontal, 6)
-        .background(Color(.tertiarySystemFill))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-
-    private func countdownComponents(from now: Date, to target: Date) -> (days: Int, hours: Int, minutes: Int, seconds: Int) {
-        let delta = max(0, target.timeIntervalSince(now))
-        let d = Int(delta) / 86400
-        let h = (Int(delta) % 86400) / 3600
-        let m = (Int(delta) % 3600) / 60
-        let s = Int(delta) % 60
-        return (d, h, m, s)
-    }
-
-    private func formattedDateRange(start: Date, end: Date) -> String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "d MMM"
-        let startStr = f.string(from: start)
-        let endStr = f.string(from: end)
-        let year = Calendar.current.component(.year, from: start)
-        return "\(startStr) – \(endStr), \(year)"
     }
 
     private static let circuitNameOverrides: [String: String] = [
@@ -823,6 +370,8 @@ struct HomeView: View {
     private func alpha2CountryCode(_ code: String) -> String {
         let raw = code.trimmingCharacters(in: .whitespaces)
         let c = raw.uppercased()
+        if c == "UK" || c == "U.K." { return "GB" }
+        if c == "UAE" { return "AE" }
         if c.count == 2 { return c }
         let iso3To2: [String: String] = [
             "BHR": "BH", "BAH": "BH", "BRN": "BH",
@@ -844,85 +393,6 @@ struct HomeView: View {
         let nameKey = raw.uppercased().replacingOccurrences(of: "-", with: " ")
         if let two = nameTo2[nameKey] { return two }
         return String(c.prefix(2))
-    }
-
-    /// 2-буквенный код страны, в которой проходит гран-при — для градиента в цветах флага.
-    /// Порядок: город (location) → country_name → country_code, чтобы всегда получить страну ГП.
-    private func heroGradientCountryCode() -> String {
-        guard let m = loader.meeting else { return "" }
-        let loc = m.location.trimmingCharacters(in: .whitespaces).uppercased()
-        let cityToCountry: [String: String] = [
-            "MELBOURNE": "AU", "SYDNEY": "AU", "SAKHIR": "BH", "JEDDAH": "SA", "SHANGHAI": "CN",
-            "SUZUKA": "JP", "MIAMI": "US", "AUSTIN": "US", "LAS VEGAS": "US", "BARCELONA": "ES",
-            "MADRID": "ES", "MONTREAL": "CA", "MONACO": "MC", "MONTE CARLO": "MC", "SPIELBERG": "AT",
-            "SILVERSTONE": "GB", "SPA": "BE", "BUDAPEST": "HU", "ZANDVOORT": "NL", "MONZA": "IT",
-            "BAKU": "AZ", "SINGAPORE": "SG", "MEXICO CITY": "MX", "MEXICO": "MX", "SÃO PAULO": "BR", "INTERLAGOS": "BR",
-            "LUSAIL": "QA", "ABU DHABI": "AE", "YAS ISLAND": "AE", "IMOLA": "IT"
-        ]
-        for (city, code) in cityToCountry where loc.contains(city) && Self.flagGradientColors[code] != nil { return code }
-        func toCode(_ raw: String) -> String {
-            let s = raw.trimmingCharacters(in: .whitespaces)
-            return s.isEmpty ? "" : alpha2CountryCode(s)
-        }
-        let fromName = toCode(m.countryName)
-        if !fromName.isEmpty, Self.flagGradientColors[fromName] != nil { return fromName }
-        let fromCode = toCode(m.countryCode)
-        if !fromCode.isEmpty, Self.flagGradientColors[fromCode] != nil { return fromCode }
-        if !fromName.isEmpty { return fromName }
-        if !fromCode.isEmpty { return fromCode }
-        for (city, code) in cityToCountry where loc.contains(city) { return code }
-        return ""
-    }
-
-    /// Цвета флага страны для анимированного градиента — по 2-буквенному коду (AU, BH, SA, …).
-    private func flagColorsForGradient(countryCode: String) -> [UIColor] {
-        let key = alpha2CountryCode(countryCode)
-        guard !key.isEmpty else { return Self.flagGradientColors["default"] ?? [UIColor(white: 0.12, alpha: 1), UIColor(white: 0.06, alpha: 1)] }
-        if let colors = Self.flagGradientColors[key] { return colors }
-        return Self.flagGradientColors["default"] ?? [UIColor(white: 0.12, alpha: 1), UIColor(white: 0.06, alpha: 1)]
-    }
-
-    /// Цвета флагов для градиента: 1–3 цвета, белый не используем. По официальным/принятым hex кодам.
-    private static let flagGradientColors: [String: [UIColor]] = [
-        "default": [UIColor(red: 0.15, green: 0.15, blue: 0.18, alpha: 1), UIColor(red: 0.08, green: 0.08, blue: 0.1, alpha: 1)],
-        "AU": [UIColor(red: 0.004, green: 0.129, blue: 0.412, alpha: 1), UIColor(red: 0.894, green: 0, blue: 0.169, alpha: 1)],   // флаг: blue #012169, red #E4002B
-        "BH": [UIColor(red: 0.808, green: 0.067, blue: 0.149, alpha: 1)],                                                       // red #CE1126
-        "SA": [UIColor(red: 0.086, green: 0.365, blue: 0.192, alpha: 1)],                                                        // green #165D31
-        "CN": [UIColor(red: 0.871, green: 0.161, blue: 0.063, alpha: 1), UIColor(red: 1, green: 0.871, blue: 0, alpha: 1)],      // red #DE2910, yellow #FFDE00
-        "JP": [UIColor(red: 0.737, green: 0, blue: 0.176, alpha: 1)],                                                           // red #BC002D
-        "US": [UIColor(red: 0.749, green: 0.039, blue: 0.188, alpha: 1), UIColor(red: 0, green: 0.157, blue: 0.408, alpha: 1)],  // red #BF0A30, blue #002868
-        "ES": [UIColor(red: 0.776, green: 0.043, blue: 0.118, alpha: 1), UIColor(red: 1, green: 0.769, blue: 0, alpha: 1)],     // red #C60B1E, yellow #FFC400
-        "CA": [UIColor(red: 0.86, green: 0.08, blue: 0.24, alpha: 1)],                                                         // red maple leaf
-        "GB": [UIColor(red: 0.004, green: 0.129, blue: 0.412, alpha: 1), UIColor(red: 0.784, green: 0.063, blue: 0.18, alpha: 1)], // blue #012169, red #C8102E
-        "AT": [UIColor(red: 0.929, green: 0.161, blue: 0.224, alpha: 1)],                                                        // red #ED2939
-        "FR": [UIColor(red: 0, green: 0.138, blue: 0.584, alpha: 1), UIColor(red: 0.929, green: 0.161, blue: 0.224, alpha: 1)],  // blue #002395, red #ED2939
-        "HU": [UIColor(red: 0.278, green: 0.439, blue: 0.314, alpha: 1), UIColor(red: 0.808, green: 0.161, blue: 0.224, alpha: 1)], // green, red
-        "BE": [UIColor(red: 1, green: 0.804, blue: 0, alpha: 1), UIColor(red: 0.784, green: 0.063, blue: 0.18, alpha: 1)],       // yellow #FFCD00, red #C8102E
-        "IT": [UIColor(red: 0, green: 0.549, blue: 0.271, alpha: 1), UIColor(red: 0.804, green: 0.129, blue: 0.165, alpha: 1)],  // green #008C45, red #CD212A
-        "SG": [UIColor(red: 0.929, green: 0.161, blue: 0.224, alpha: 1)],                                                       // red #ED2939
-        "MX": [UIColor(red: 0, green: 0.408, blue: 0.278, alpha: 1), UIColor(red: 0.808, green: 0.067, blue: 0.149, alpha: 1)],  // green #006847, red #CE1126
-        "BR": [UIColor(red: 0, green: 0.592, blue: 0.224, alpha: 1), UIColor(red: 1, green: 0.867, blue: 0, alpha: 1)],          // green #009739, yellow #FEDD00
-        "AE": [UIColor(red: 0, green: 0.451, blue: 0.184, alpha: 1), UIColor(red: 0, green: 0, blue: 0, alpha: 1)],             // green #00732F, black
-        "QA": [UIColor(red: 0.541, green: 0.082, blue: 0.22, alpha: 1)],                                                       // maroon #8A1538
-        "AZ": [UIColor(red: 0, green: 0.663, blue: 0.808, alpha: 1), UIColor(red: 0.929, green: 0.161, blue: 0.224, alpha: 1)],   // blue #00A9CE, red
-        "MC": [UIColor(red: 0.808, green: 0.067, blue: 0.149, alpha: 1)],                                                     // red #CE1126
-        "NL": [UIColor(red: 1, green: 0.4, blue: 0, alpha: 1), UIColor(red: 0.129, green: 0.275, blue: 0.545, alpha: 1)],        // orange #FF6600, blue #21468B
-    ]
-
-    /// Флаг: картинка из Assets/Flags (пропорции без обрезки), иначе эмодзи.
-    private func flagView(countryCode: String) -> some View {
-        let alpha2 = alpha2CountryCode(countryCode)
-        if let name = String.AppImage.flagImage(countryCode: alpha2) {
-            return AnyView(
-                Image(name)
-                .resizable()
-                .scaledToFit()
-                    .aspectRatio(3/2, contentMode: .fit)
-                    .frame(width: 28, height: 20)
-                    .clipShape(RoundedRectangle(cornerRadius: 3))
-            )
-        }
-        return AnyView(Text(flagEmoji(countryCode: countryCode)))
     }
 
     private func flagEmoji(countryCode: String) -> String {
@@ -949,7 +419,7 @@ private struct HomeHeroLeftContentView: View {
         return VStack(alignment: .leading, spacing: 6) {
             if isLiveNow {
                 Text("Live")
-                    .font(Font.custom(FontWeight.titilliumWebSemiBold.rawValue, size: 13))
+                    .font(Font.custom(FontWeight.outfitSemiBold.rawValue, size: 13))
                     .foregroundStyle(.white.opacity(0.85))
                 if !top3.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
@@ -959,7 +429,7 @@ private struct HomeHeroLeftContentView: View {
                                     .fill(heroTeamColor(for: row.teamName))
                                     .frame(width: 14, height: 14)
                                 Text("\(row.position). \(row.name)")
-                                    .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 13))
+                                    .font(Font.custom(FontWeight.outfitRegular.rawValue, size: 13))
                                     .foregroundStyle(.white)
                                     .lineLimit(1)
                                 Spacer()
@@ -969,17 +439,17 @@ private struct HomeHeroLeftContentView: View {
                     .animation(.easeInOut(duration: 0.28), value: top3.map { "\($0.driverNumber)-\($0.position)" }.joined(separator: ","))
                 } else {
                     Text("\(liveMapState.locations.count) машин на трассе")
-                        .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 12))
+                        .font(Font.custom(FontWeight.outfitRegular.rawValue, size: 12))
                         .foregroundStyle(.white.opacity(0.8))
                 }
             } else if let m = loader.meeting {
                 Text(m.meetingName)
-                    .font(Font.custom(FontWeight.titilliumWebSemiBold.rawValue, size: 16))
+                    .font(Font.custom(FontWeight.outfitSemiBold.rawValue, size: 16))
                     .foregroundStyle(.white)
                     .lineLimit(2)
                 if let str = heroGpDateString(m) {
                     Text(str)
-                        .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 13))
+                        .font(Font.custom(FontWeight.outfitRegular.rawValue, size: 13))
                         .foregroundStyle(Color(.systemGray))
                 }
                 if let (start, eventName) = heroNextEventTarget(), start > Date() {
@@ -1026,10 +496,10 @@ private struct HomeHeroLeftContentView: View {
                 if let name = eventName, !name.isEmpty {
                     HStack(spacing: 2) {
                         Text("until ")
-                            .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 11))
+                            .font(Font.custom(FontWeight.outfitRegular.rawValue, size: 11))
                             .foregroundStyle(.white.opacity(0.85))
                         Text(name)
-                            .font(Font.custom(FontWeight.titilliumWebSemiBold.rawValue, size: 11))
+                            .font(Font.custom(FontWeight.outfitSemiBold.rawValue, size: 11))
                             .foregroundStyle(.white)
                     }
                 }
@@ -1084,17 +554,22 @@ private struct HomeHeroLeftContentView: View {
     private func heroCountdownBlock(value: Int, label: String) -> some View {
         VStack(spacing: 1) {
             Text(String(format: "%02d", value))
-                .font(Font.custom(FontWeight.titilliumWebSemiBold.rawValue, size: 13))
+                .font(Font.custom(FontWeight.outfitSemiBold.rawValue, size: 13))
                 .monospacedDigit()
                 .foregroundStyle(.white)
+                .contentTransition(.numericText())
+                .animation(.easeOut(duration: 0.16), value: value)
             Text(label)
-                .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 8))
+                .font(Font.custom(FontWeight.outfitRegular.rawValue, size: 8))
                 .foregroundStyle(.white.opacity(0.85))
         }
         .frame(minWidth: 26)
         .padding(.vertical, 4)
         .padding(.horizontal, 3)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 6))
+        .background {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color.white.opacity(0.14))
+        }
     }
 
     private func heroCountdownComponents(from now: Date, to target: Date) -> (days: Int, hours: Int, minutes: Int, seconds: Int) {
@@ -1138,79 +613,6 @@ private struct HomeHeroLeftContentView: View {
     }
 }
 
-// MARK: - News card & in-app Safari
-private struct IdentifiableURL: Identifiable {
-    let url: URL
-    var id: String { url.absoluteString }
-}
-
-private struct FIANewsCard: View {
-    let item: FIANewsItem
-    var onOpenURL: (URL) -> Void
-    private var cardBackground: Color { Color(.secondarySystemGroupedBackground) }
-    private var cardBorder: Color { Color(.separator).opacity(0.8) }
-
-    var body: some View {
-        Button {
-            guard let url = URL(string: item.link) else { return }
-            onOpenURL(url)
-        } label: {
-            VStack(alignment: .leading, spacing: 10) {
-                if let urlString = item.imageURL, let url = URL(string: urlString) {
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case .success(let image):
-                            image
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                        case .failure:
-                            Color(.tertiarySystemFill)
-                        case .empty:
-                            Color(.tertiarySystemFill)
-                                .overlay { ProgressView() }
-                        @unknown default:
-                            Color(.tertiarySystemFill)
-                        }
-                    }
-                    .frame(height: 160)
-                    .clipped()
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                }
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(item.title)
-                        .font(Font.custom(FontWeight.titilliumWebSemiBold.rawValue, size: 16))
-                        .foregroundStyle(.primary)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                    Text(fiaNewsDateString(item.pubDate))
-                        .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 12))
-                        .foregroundStyle(.secondary)
-                    if !item.description.isEmpty {
-                        Text(item.description)
-                            .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 14))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(3)
-                            .multilineTextAlignment(.leading)
-                    }
-                }
-            }
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(cardBorder, lineWidth: 1))
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func fiaNewsDateString(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "d MMM, HH:mm"
-        return f.string(from: date)
-    }
-}
-
 /// Герой-карта с точками. Точки обновляются через UIKit (loader.registerLiveDotsView) — без @Published и без лагов SwiftUI.
 private struct HeroCircuitMapWithDotsView: View {
     @EnvironmentObject var loader: SeasonDataLoader
@@ -1224,18 +626,25 @@ private struct HeroCircuitMapWithDotsView: View {
         ZStack(alignment: .topLeading) {
             TrackMapView(
                 circuitInfo: circuitInfo,
-                imageURL: meeting.circuitImage,
+                imageURL: nil,
                 localTrackImageName: localTrackImageName,
                 compact: true,
                 compactSize: size,
+                preferRasterTrackInCompact: false,
                 strokeColor: .white,
                 cardBackground: .clear
             )
             .frame(width: size.width, height: size.height)
-            LiveCircuitDotsUIKitView(loader: loader, circuitInfo: circuitInfo, size: size)
-                .zIndex(1)
+            LiveCircuitDotsUIKitView(
+                loader: loader,
+                meetingKey: meeting.meetingKey,
+                circuitInfo: circuitInfo,
+                size: size
+            )
+            .zIndex(1)
         }
         .frame(width: size.width, height: size.height)
+        .onDisappear { loader.unregisterLiveDotsView() }
     }
 }
 
@@ -1262,6 +671,7 @@ private final class LiveDotsUIView: UIView, LiveDotsViewUpdating {
     private func commonInit() {
         let link = CADisplayLink(target: self, selector: #selector(tick))
         link.add(to: .main, forMode: .common)
+        link.isPaused = true
         displayLink = link
     }
 
@@ -1271,6 +681,7 @@ private final class LiveDotsUIView: UIView, LiveDotsViewUpdating {
                 displayByDriver = [:]
                 setNeedsDisplay()
             }
+            displayLink?.isPaused = true
             return
         }
 
@@ -1304,6 +715,14 @@ private final class LiveDotsUIView: UIView, LiveDotsViewUpdating {
         targetByDriver = newTarget
         colorByDriver = newColors
 
+        if newTarget.isEmpty {
+            displayByDriver = [:]
+            displayLink?.isPaused = true
+            setNeedsDisplay()
+            return
+        }
+        displayLink?.isPaused = false
+
         // Новый гонщик — начинаем сразу с target, чтобы не вылетал из угла.
         for (num, p) in newTarget where displayByDriver[num] == nil {
             displayByDriver[num] = p
@@ -1335,19 +754,38 @@ private final class LiveDotsUIView: UIView, LiveDotsViewUpdating {
 
 private struct LiveCircuitDotsUIKitView: UIViewRepresentable {
     var loader: SeasonDataLoader
+    var meetingKey: Int
     var circuitInfo: CircuitInfo?
     var size: CGSize
+
+    final class Coordinator {
+        var registrationKey: (Int, Int, CGFloat, CGFloat)?
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
 
     func makeUIView(context: Context) -> LiveDotsUIView {
         let v = LiveDotsUIView()
         v.backgroundColor = .clear
         v.isOpaque = false
+        context.coordinator.registrationKey = registrationFingerprint()
         loader.registerLiveDotsView(v, circuitInfo: circuitInfo, size: size)
         return v
     }
 
     func updateUIView(_ uiView: LiveDotsUIView, context: Context) {
+        let fp = registrationFingerprint()
+        if let existing = context.coordinator.registrationKey, existing == fp { return }
+        context.coordinator.registrationKey = fp
         loader.registerLiveDotsView(uiView, circuitInfo: circuitInfo, size: size)
+    }
+
+    private func registrationFingerprint() -> (Int, Int, CGFloat, CGFloat) {
+        let pathCount = circuitInfo?.cachedNormalizedPath?.count
+            ?? (circuitInfo.map { max($0.x.count, $0.y.count) } ?? 0)
+        return (meetingKey, pathCount, size.width, size.height)
     }
 }
 
@@ -1428,27 +866,3 @@ private struct LiveCircuitDotsOverlay: View {
     }
 }
 
-private struct SafariView: UIViewControllerRepresentable {
-    let url: URL
-    var onDismiss: () -> Void
-
-    func makeUIViewController(context: Context) -> SFSafariViewController {
-        let vc = SFSafariViewController(url: url)
-        vc.delegate = context.coordinator
-        return vc
-    }
-
-    func updateUIViewController(_ uiViewController: SFSafariViewController, context: Context) {}
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onDismiss: onDismiss)
-    }
-
-    final class Coordinator: NSObject, SFSafariViewControllerDelegate {
-        let onDismiss: () -> Void
-        init(onDismiss: @escaping () -> Void) { self.onDismiss = onDismiss }
-        func safariViewControllerDidFinish(_ controller: SFSafariViewController) {
-            onDismiss()
-        }
-    }
-}

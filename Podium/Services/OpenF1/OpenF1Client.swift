@@ -439,7 +439,8 @@ final class OpenF1Client {
         }
         let isLocationAPI = url.absoluteString.contains("/location")
         // Лайв `/location` нельзя блокировать на 30 с из‑за Retry-After — иначе карта «замирает» на секунды.
-        let maxAttempts = isLocationAPI ? 2 : 8
+        // Без Bearer 429/401 повторять бессмысленно — только шум и задержки в bootstrap.
+        let maxAttempts = isLocationAPI ? 2 : (token == nil ? 1 : 8)
         var lastStatus: Int?
         for attempt in 1...maxAttempts {
             let (data, response) = try await session.data(for: request)

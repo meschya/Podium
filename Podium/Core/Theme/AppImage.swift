@@ -9,7 +9,6 @@ import UIKit
 extension String {
     enum AppImage {
         static let aston_martin_splash: String = "aston_martin_splash"
-        static let f1_logo: String = "f1_logo"
 
         // Teams logos
         static let alpine_logo: String = "alpine_logo"

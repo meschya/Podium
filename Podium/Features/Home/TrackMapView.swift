@@ -7,6 +7,8 @@ struct TrackMapView: View {
     var localTrackImageName: String? = nil
     var compact: Bool = false
     var compactSize: CGSize?
+    /// В компактном режиме: `true` — сначала ассет из Tracks (горизонтальный Season); `false` — сначала вектор по `circuitInfo` (герой с таймером и live-точками на той же сетке координат).
+    var preferRasterTrackInCompact: Bool = true
     var strokeColor: Color = .red
     var cardBackground: Color = Color(.systemGray6)
 
@@ -42,19 +44,47 @@ struct TrackMapView: View {
     @ViewBuilder
     private func compactContentView(in size: CGSize) -> some View {
         let pathPoints = circuitInfo?.normalizedPathPoints() ?? []
-        if pathPoints.count >= 2 {
-            CircuitPathShape(points: pathPoints)
-                .stroke(strokeColor, lineWidth: compact ? 2.5 : 3)
-        } else if let name = localTrackImageName {
-            Image(name)
-                .resizable()
-                .interpolation(.high)
-                .antialiased(true)
-                .renderingMode(.template)
-                .foregroundStyle(strokeColor)
-                .scaledToFit()
-                .frame(width: size.width, height: size.height)
-        } else if let urlString = imageURL, let url = URL(string: urlString) {
+        let hasPath = pathPoints.count >= 2
+
+        if preferRasterTrackInCompact {
+            if let name = localTrackImageName {
+                compactTrackAsset(name: name, size: size)
+            } else if hasPath {
+                compactTrackPath(points: pathPoints, size: size)
+            } else {
+                compactFallbackURLorPlaceholder(size: size)
+            }
+        } else {
+            if hasPath {
+                compactTrackPath(points: pathPoints, size: size)
+            } else if let name = localTrackImageName {
+                compactTrackAsset(name: name, size: size)
+            } else {
+                compactFallbackURLorPlaceholder(size: size)
+            }
+        }
+    }
+
+    private func compactTrackAsset(name: String, size: CGSize) -> some View {
+        Image(name)
+            .resizable()
+            .interpolation(.high)
+            .antialiased(true)
+            .renderingMode(.template)
+            .foregroundStyle(strokeColor)
+            .scaledToFit()
+            .frame(width: size.width, height: size.height)
+    }
+
+    private func compactTrackPath(points: [(CGFloat, CGFloat)], size: CGSize) -> some View {
+        CircuitPathShape(points: points)
+            .stroke(strokeColor, lineWidth: compact ? 2.5 : 3)
+            .frame(width: size.width, height: size.height)
+    }
+
+    @ViewBuilder
+    private func compactFallbackURLorPlaceholder(size: CGSize) -> some View {
+        if let urlString = imageURL, let url = URL(string: urlString) {
             AsyncImage(url: url) { phase in
                 switch phase {
                 case .success(let image):
@@ -65,7 +95,7 @@ struct TrackMapView: View {
                 case .failure:
                     trackPlaceholder
                 case .empty:
-                    ProgressView()
+                    Color.clear
                 @unknown default:
                     trackPlaceholder
                 }

@@ -22,13 +22,9 @@ struct RacesView: View {
                 HStack(spacing: 5) {
                     Text("Podium")
                         .font(Font.custom(FontWeight.nastonRegular.rawValue, size: 22))
-                    Image(String.AppImage.f1_logo)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(height: 20)
                     Spacer()
                     Text(headerDate)
-                        .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 15))
+                        .font(Font.custom(FontWeight.outfitRegular.rawValue, size: 15))
                         .foregroundStyle(.secondary)
                 }
                 .padding(.horizontal, 20)
@@ -125,16 +121,16 @@ struct RacesView: View {
             VStack(alignment: .leading, spacing: 3) {
                 driverNameTwoLines(row.driverName)
                 Text(cleanTeamName(row.teamName ?? "—"))
-                    .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 10))
+                    .font(Font.custom(FontWeight.outfitRegular.rawValue, size: 10))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
                     .frame(width: 50, alignment: .leading)
                 Spacer(minLength: 2)
                 Text("\(row.points) pts")
-                    .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 10))
+                    .font(Font.custom(FontWeight.outfitRegular.rawValue, size: 10))
                     .foregroundStyle(.secondary)
                 Text(row.time.isEmpty ? "—" : row.time)
-                    .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 9))
+                    .font(Font.custom(FontWeight.outfitRegular.rawValue, size: 9))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -219,7 +215,7 @@ struct RacesView: View {
         let parts = fullName.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
         if parts.count <= 1 {
             Text(fullName)
-                .font(Font.custom(FontWeight.titilliumWebSemiBold.rawValue, size: 13))
+                .font(Font.custom(FontWeight.outfitSemiBold.rawValue, size: 13))
                 .lineLimit(1)
                 .foregroundStyle(.primary)
         } else {
@@ -227,11 +223,11 @@ struct RacesView: View {
             let first = parts.dropLast().joined(separator: " ")
             VStack(alignment: .leading, spacing: 1) {
                 Text(surname)
-                    .font(Font.custom(FontWeight.titilliumWebSemiBold.rawValue, size: 13))
+                    .font(Font.custom(FontWeight.outfitSemiBold.rawValue, size: 13))
                     .lineLimit(1)
                     .foregroundStyle(.primary)
                 Text(first)
-                    .font(Font.custom(FontWeight.titilliumWebSemiBold.rawValue, size: 13))
+                    .font(Font.custom(FontWeight.outfitSemiBold.rawValue, size: 13))
                     .lineLimit(1)
                     .foregroundStyle(.primary)
             }
@@ -291,7 +287,7 @@ struct RacesView: View {
                         .padding(.vertical, 24)
                 } else if results.isEmpty {
                     Text("No results")
-                        .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 14))
+                        .font(Font.custom(FontWeight.outfitRegular.rawValue, size: 14))
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 24)
@@ -327,7 +323,7 @@ struct RacesView: View {
             Text("Score")
                 .frame(width: 44, alignment: .trailing)
         }
-        .font(Font.custom(FontWeight.titilliumWebSemiBold.rawValue, size: 11))
+        .font(Font.custom(FontWeight.outfitSemiBold.rawValue, size: 11))
         .foregroundStyle(.secondary)
         .padding(.vertical, 8)
         .padding(.horizontal, 4)
@@ -381,7 +377,7 @@ struct RacesView: View {
             Text("\(row.points)")
                 .frame(width: 44, alignment: .trailing)
         }
-        .font(Font.custom(FontWeight.titilliumWebRegular.rawValue, size: 13))
+        .font(Font.custom(FontWeight.outfitRegular.rawValue, size: 13))
         .padding(.vertical, 6)
         .padding(.horizontal, 4)
     }

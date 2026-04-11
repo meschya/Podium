@@ -5,6 +5,7 @@ struct MainView: View {
     @EnvironmentObject private var loader: SeasonDataLoader
     @Environment(\.scenePhase) private var scenePhase
     @State private var lastResumeBootstrapAt: Date?
+    @State private var selectedTab = 0
 
     private func handleAppBecameActive() {
         let now = Date()
@@ -15,23 +16,51 @@ struct MainView: View {
     }
 
     var body: some View {
-        TabView {
-            HomeView()
-                .tabItem {
-                    Image(systemName: "house.fill")
+        TabView(selection: $selectedTab) {
+            Group {
+                if selectedTab == 0 {
+                    HomeView()
+                } else {
+                    Color.black
                 }
-            RacesView()
-                .tabItem {
-                    Image(systemName: "flag.checkered")
+            }
+            .tabItem {
+                Image(systemName: "house.fill")
+            }
+            .tag(0)
+            Group {
+                if selectedTab == 1 {
+                    RacesView()
+                } else {
+                    Color(.systemBackground)
                 }
-            DriversCupView()
-                .tabItem {
-                    Image(systemName: "trophy.fill")
+            }
+            .tabItem {
+                Image(systemName: "flag.checkered")
+            }
+            .tag(1)
+            Group {
+                if selectedTab == 2 {
+                    DriversCupView()
+                } else {
+                    Color(.systemBackground)
                 }
-            SettingsView()
-                .tabItem {
-                    Image(systemName: "gearshape.fill")
+            }
+            .tabItem {
+                Image(systemName: "trophy.fill")
+            }
+            .tag(2)
+            Group {
+                if selectedTab == 3 {
+                    SettingsView()
+                } else {
+                    Color(.systemBackground)
                 }
+            }
+            .tabItem {
+                Image(systemName: "gearshape.fill")
+            }
+            .tag(3)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .tint(.white)

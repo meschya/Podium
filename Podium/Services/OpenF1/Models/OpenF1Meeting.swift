@@ -24,23 +24,37 @@ struct OpenF1Meeting: Codable, Identifiable, Hashable {
 
     var id: Int { meetingKey }
 
-    private static let dateParsers: [DateFormatter] = {
-        let formats = ["yyyy-MM-dd", "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ssZ", "yyyy-MM-dd'T'HH:mm:ss.SSSZ"]
-        return formats.map { format in
+    /// Сначала ISO8601 и форматы с временем — иначе `yyyy-MM-dd` «съедает» только дату и даёт полночь вместо реального старта (ломает таймер героя и окна live-сессий).
+    private static func parseMeetingInstant(_ raw: String) -> Date? {
+        let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return nil }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = iso.date(from: s) { return d }
+        iso.formatOptions = [.withInternetDateTime]
+        if let d = iso.date(from: s) { return d }
+        let formats = [
+            "yyyy-MM-dd'T'HH:mm:ss.SSSZ",
+            "yyyy-MM-dd'T'HH:mm:ssZ",
+            "yyyy-MM-dd'T'HH:mm:ss",
+            "yyyy-MM-dd",
+        ]
+        for format in formats {
             let f = DateFormatter()
             f.locale = Locale(identifier: "en_US_POSIX")
             f.dateFormat = format
             f.timeZone = TimeZone(identifier: "UTC")
-            return f
+            if let d = f.date(from: s) { return d }
         }
-    }()
+        return nil
+    }
 
     var parsedDateStart: Date? {
-        Self.dateParsers.lazy.compactMap { $0.date(from: dateStart) }.first
+        Self.parseMeetingInstant(dateStart)
     }
 
     var parsedDateEnd: Date? {
-        Self.dateParsers.lazy.compactMap { $0.date(from: dateEnd) }.first
+        Self.parseMeetingInstant(dateEnd)
     }
 
     init(

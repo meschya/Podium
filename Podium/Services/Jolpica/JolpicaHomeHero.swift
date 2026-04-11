@@ -121,11 +121,14 @@ enum JolpicaHomeHero {
         let map: [String: String] = [
             "australia": "AU", "bahrain": "BH", "china": "CN", "japan": "JP", "saudi arabia": "SA",
             "united states": "US", "italy": "IT", "monaco": "MC", "spain": "ES", "canada": "CA",
-            "austria": "AT", "great britain": "GB", "united kingdom": "GB", "hungary": "HU", "belgium": "BE",
+            "austria": "AT", "great britain": "GB", "united kingdom": "GB", "uk": "GB", "hungary": "HU", "belgium": "BE",
             "netherlands": "NL", "azerbaijan": "AZ", "singapore": "SG", "mexico": "MX",
-            "brazil": "BR", "united arab emirates": "AE", "qatar": "QA", "usa": "US"
+            "brazil": "BR", "united arab emirates": "AE", "uae": "AE", "qatar": "QA", "usa": "US"
         ]
         if let c = map[lower] { return c }
+        let u = country.uppercased()
+        if u == "UK" { return "GB" }
+        if u == "UAE" { return "AE" }
         return String(country.prefix(2)).uppercased()
     }
 
